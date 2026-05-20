@@ -1,56 +1,48 @@
 /**
- * Filesystem locations the extension reads and writes.
+ * Filesystem locations for the extension.
  *
- * Two kinds of file are involved:
- *  - Pi's own settings files (`settings.json`) — the extension snapshots and
- *    restores the `default*` keys in these.
- *  - The extension's own config files (`model-persistence.json`) — these hold
- *    the `mode` / `include` / ... configuration described in the README.
+ * - Extension config: `~/.pi/model-persistence/config.json`
+ * - Pi global settings: `~/.pi/agent/settings.json` (snapshotted/restored)
  *
- * All path building is pure so tests can point `home` and `cwd` at temp dirs.
+ * No workspace `.pi/` paths — Pi's native project settings handle per-project
+ * overrides; this extension only guards global defaults.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Filename of Pi's settings file in both global and workspace scopes. */
+/** Name of the config directory inside `~/.pi`. */
+const CONFIG_DIR = "model-persistence";
+/** Name of the single config file. */
+const CONFIG_FILENAME = "config.json";
+/** Pi's settings filename. */
 export const SETTINGS_FILENAME = "settings.json";
 
-/** Filename of the extension's own config file in both scopes. */
-export const CONFIG_FILENAME = "model-persistence.json";
-
 export type ExtensionPaths = {
+  /** `~/.pi/model-persistence` */
+  configDir: string;
+  /** `~/.pi/model-persistence/config.json` */
+  configPath: string;
   /** `~/.pi/agent` */
   globalAgentDir: string;
-  /** `~/.pi/agent/settings.json` — Pi's global settings. */
+  /** `~/.pi/agent/settings.json` */
   globalSettingsPath: string;
-  /** `~/.pi/agent/model-persistence.json` — global extension config. */
-  globalConfigPath: string;
-  /** `<cwd>/.pi` */
-  workspacePiDir: string;
-  /** `<cwd>/.pi/settings.json` — Pi's workspace settings. */
-  workspaceSettingsPath: string;
-  /** `<cwd>/.pi/model-persistence.json` — workspace extension config. */
-  workspaceConfigPath: string;
 };
 
 /**
  * Resolve every path the extension cares about.
  *
  * @param options.home  Home directory; defaults to `os.homedir()`.
- * @param options.cwd   Pi's working directory (`ctx.cwd`).
  */
-export function resolvePaths(options: { home?: string; cwd: string }): ExtensionPaths {
+export function resolvePaths(options: { home?: string }): ExtensionPaths {
   const home = options.home ?? homedir();
+  const configDir = join(home, ".pi", CONFIG_DIR);
   const globalAgentDir = join(home, ".pi", "agent");
-  const workspacePiDir = join(options.cwd, ".pi");
 
   return {
+    configDir,
+    configPath: join(configDir, CONFIG_FILENAME),
     globalAgentDir,
     globalSettingsPath: join(globalAgentDir, SETTINGS_FILENAME),
-    globalConfigPath: join(globalAgentDir, CONFIG_FILENAME),
-    workspacePiDir,
-    workspaceSettingsPath: join(workspacePiDir, SETTINGS_FILENAME),
-    workspaceConfigPath: join(workspacePiDir, CONFIG_FILENAME),
   };
 }

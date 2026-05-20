@@ -17,9 +17,7 @@ type Env = {
   home: string;
   cwd: string;
   globalSettings: string;
-  globalConfig: string;
-  workspaceSettings: string;
-  workspaceConfig: string;
+  configPath: string;
   notes: Note[];
   statuses: Status[];
 };
@@ -32,14 +30,13 @@ async function createEnv(): Promise<Env> {
   const home = join(root, "home");
   const cwd = join(root, "cwd");
   await mkdir(join(home, ".pi", "agent"), { recursive: true });
+  await mkdir(join(home, ".pi", "model-persistence"), { recursive: true });
   await mkdir(cwd, { recursive: true });
   return {
     home,
     cwd,
     globalSettings: join(home, ".pi", "agent", "settings.json"),
-    globalConfig: join(home, ".pi", "agent", "model-persistence.json"),
-    workspaceSettings: join(cwd, ".pi", "settings.json"),
-    workspaceConfig: join(cwd, ".pi", "model-persistence.json"),
+    configPath: join(home, ".pi", "model-persistence", "config.json"),
     notes: [],
     statuses: [],
   };
@@ -68,11 +65,6 @@ async function readJson(path: string): Promise<JsonObject> {
   return JSON.parse(await readFile(path, "utf8")) as JsonObject;
 }
 
-async function writeWorkspaceConfig(env: Env, config: JsonObject): Promise<void> {
-  await mkdir(join(env.cwd, ".pi"), { recursive: true });
-  await writeJsonAtomic(env.workspaceConfig, config);
-}
-
 function modelEvent(provider: string, id: string, source: "set" | "cycle" | "restore" = "set") {
   return { model: { provider, id }, source } as const;
 }
@@ -95,7 +87,6 @@ describe("session mode", () => {
     const engine = newEngine(env);
     await engine.init();
 
-    // Pi persists the new model into the global settings file.
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
@@ -159,13 +150,11 @@ describe("session mode", () => {
 
   it("deletes fields that were absent in the captured snapshot", async () => {
     const env = await createEnv();
-    // No defaults at all when the snapshot is taken.
     await writeJsonAtomic(env.globalSettings, { theme: "dark" });
 
     const engine = newEngine(env);
     await engine.init();
 
-    // Pi adds brand-new default keys.
     await writeJsonAtomic(env.globalSettings, {
       theme: "dark",
       defaultProvider: "openai",
@@ -188,7 +177,6 @@ describe("session mode", () => {
     const engine = newEngine(env);
     await engine.init();
 
-    // Pi clamps thinking level and changes model in one /model action.
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
@@ -196,7 +184,6 @@ describe("session mode", () => {
       theme: "dark",
     });
 
-    // Fire both without awaiting in between.
     const thinking = engine.onThinkingLevelSelect({ level: "high" });
     const model = engine.onModelSelect(modelEvent("openai", "gpt-5"));
     await Promise.all([thinking, model]);
@@ -211,52 +198,13 @@ describe("session mode", () => {
 });
 
 // ---------------------------------------------------------------------------
-// workspace mode
-// ---------------------------------------------------------------------------
-
-describe("workspace mode", () => {
-  it("writes provider/model/thinking into .pi/settings.json and restores global", async () => {
-    const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { mode: "workspace" });
-    await writeJsonAtomic(env.globalSettings, {
-      defaultProvider: "anthropic",
-      defaultModel: "claude-x",
-      defaultThinkingLevel: "medium",
-    });
-
-    const engine = newEngine(env);
-    await engine.init();
-    expect(engine.getConfig().mode).toBe("workspace");
-
-    await writeJsonAtomic(env.globalSettings, {
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-      defaultThinkingLevel: "high",
-    });
-    await engine.onModelSelect(modelEvent("openai", "gpt-5"));
-    await engine.onThinkingLevelSelect({ level: "high" });
-
-    expect(await readJson(env.workspaceSettings)).toEqual({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-      defaultThinkingLevel: "high",
-    });
-    expect(await readJson(env.globalSettings)).toEqual({
-      defaultProvider: "anthropic",
-      defaultModel: "claude-x",
-      defaultThinkingLevel: "medium",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
 // global mode
 // ---------------------------------------------------------------------------
 
 describe("global mode", () => {
-  it("leaves settings untouched and never creates a workspace settings file", async () => {
+  it("leaves settings untouched", async () => {
     const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { mode: "global" });
+    await writeJsonAtomic(env.configPath, { mode: "global" });
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
@@ -272,29 +220,17 @@ describe("global mode", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
     });
-    expect(await pathExists(env.workspaceSettings)).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------------------
-// config layering & include flags
+// include flags
 // ---------------------------------------------------------------------------
 
-describe("configuration", () => {
-  it("lets workspace config override global extension config", async () => {
-    const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { mode: "session" });
-    await writeWorkspaceConfig(env, { mode: "workspace" });
-
-    const engine = newEngine(env);
-    await engine.init();
-
-    expect(engine.getConfig().mode).toBe("workspace");
-  });
-
+describe("include flags", () => {
   it("skips model handling when include.model is false", async () => {
     const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { include: { model: false } });
+    await writeJsonAtomic(env.configPath, { include: { model: false } });
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "anthropic",
       defaultModel: "claude-x",
@@ -303,7 +239,6 @@ describe("configuration", () => {
     const engine = newEngine(env);
     await engine.init();
 
-    // Pi changes the model; with include.model=false the engine ignores it.
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
@@ -313,6 +248,26 @@ describe("configuration", () => {
     expect(await readJson(env.globalSettings)).toEqual({
       defaultProvider: "openai",
       defaultModel: "gpt-5",
+    });
+  });
+
+  it("skips thinking handling when include.thinkingLevel is false", async () => {
+    const env = await createEnv();
+    await writeJsonAtomic(env.configPath, { include: { thinkingLevel: false } });
+    await writeJsonAtomic(env.globalSettings, {
+      defaultThinkingLevel: "medium",
+    });
+
+    const engine = newEngine(env);
+    await engine.init();
+
+    await writeJsonAtomic(env.globalSettings, {
+      defaultThinkingLevel: "high",
+    });
+    await engine.onThinkingLevelSelect({ level: "high" });
+
+    expect(await readJson(env.globalSettings)).toEqual({
+      defaultThinkingLevel: "high",
     });
   });
 });
@@ -333,14 +288,12 @@ describe("restoreOnModelRestore", () => {
     await engine.init();
     expect(engine.getConfig().restoreOnModelRestore).toBe(false);
 
-    // A session restore re-applies the saved model.
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",
     });
     await engine.onModelSelect(modelEvent("openai", "gpt-5", "restore"));
 
-    // Untouched: the engine did not fight the session restore.
     expect(await readJson(env.globalSettings)).toEqual({
       defaultProvider: "openai",
       defaultModel: "gpt-5",
@@ -349,7 +302,7 @@ describe("restoreOnModelRestore", () => {
 
   it("honours restore events when restoreOnModelRestore is true", async () => {
     const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { restoreOnModelRestore: true });
+    await writeJsonAtomic(env.configPath, { restoreOnModelRestore: true });
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "anthropic",
       defaultModel: "claude-x",
@@ -382,7 +335,7 @@ describe("commands", () => {
     thinkingLevel: "high",
   };
 
-  it("save-global writes global defaults and updates the captured baseline", async () => {
+  it("save writes global defaults and updates the captured baseline", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "anthropic",
@@ -393,7 +346,7 @@ describe("commands", () => {
     const engine = newEngine(env);
     await engine.init();
 
-    await engine.runCommand("save-global", active);
+    await engine.runCommand("save", active);
 
     expect(await readJson(env.globalSettings)).toEqual({
       defaultProvider: "openai",
@@ -402,7 +355,6 @@ describe("commands", () => {
       theme: "dark",
     });
 
-    // Baseline now matches the deliberate save.
     const snap = engine.getSnapshot();
     expect(snap.defaultProvider).toEqual({ present: true, value: "openai" });
     expect(snap.defaultModel).toEqual({ present: true, value: "gpt-5" });
@@ -420,57 +372,52 @@ describe("commands", () => {
     expect(after.defaultModel).toBe("gpt-5");
   });
 
-  it("save-workspace writes workspace defaults into .pi/settings.json", async () => {
+  it("pin saves current model to workspace pins", async () => {
+    const env = await createEnv();
+    const engine = newEngine(env);
+    await engine.init();
+    expect(engine.getWorkspacePin()).toBeUndefined();
+
+    await engine.runCommand("pin", active);
+
+    expect(engine.getWorkspacePin()).toEqual({
+      provider: "openai",
+      model: "gpt-5",
+      thinkingLevel: "high",
+    });
+
+    const cfg = await readJson(env.configPath);
+    expect(cfg.pins).toBeDefined();
+    expect((cfg.pins as JsonObject)[env.cwd]).toEqual({
+      provider: "openai",
+      model: "gpt-5",
+      thinkingLevel: "high",
+    });
+  });
+
+  it("unpin removes the workspace pin", async () => {
     const env = await createEnv();
     const engine = newEngine(env);
     await engine.init();
 
-    await engine.runCommand("save-workspace", active);
+    await engine.runCommand("pin", active);
+    expect(engine.getWorkspacePin()).toBeDefined();
 
-    expect(await readJson(env.workspaceSettings)).toEqual({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-      defaultThinkingLevel: "high",
-    });
+    await engine.runCommand("unpin", active);
+    expect(engine.getWorkspacePin()).toBeUndefined();
   });
 
-  it("capture re-snapshots the current global defaults", async () => {
+  it("unpin is a no-op when no pin exists", async () => {
     const env = await createEnv();
-    await writeJsonAtomic(env.globalSettings, {
-      defaultProvider: "anthropic",
-      defaultModel: "claude-x",
-    });
-
     const engine = newEngine(env);
     await engine.init();
 
-    // Global defaults change outside the extension's restore path.
-    await writeJsonAtomic(env.globalSettings, {
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-    });
-    await engine.runCommand("capture", active);
+    await engine.runCommand("unpin", active);
 
-    const snap = engine.getSnapshot();
-    expect(snap.defaultProvider).toEqual({ present: true, value: "openai" });
-    expect(snap.defaultModel).toEqual({ present: true, value: "gpt-5" });
+    expect(env.notes.at(-1)?.message).toContain("no workspace pin");
   });
 
-  it("mode writes the workspace config when a .pi/ directory exists", async () => {
-    const env = await createEnv();
-    await mkdir(join(env.cwd, ".pi"), { recursive: true });
-
-    const engine = newEngine(env);
-    await engine.init();
-
-    await engine.runCommand("mode workspace", active);
-
-    expect(engine.getConfig().mode).toBe("workspace");
-    expect(await readJson(env.workspaceConfig)).toEqual({ mode: "workspace" });
-    expect(await pathExists(env.globalConfig)).toBe(false);
-  });
-
-  it("mode writes the global config when no .pi/ directory exists", async () => {
+  it("mode <session|global> sets the mode", async () => {
     const env = await createEnv();
     const engine = newEngine(env);
     await engine.init();
@@ -478,11 +425,10 @@ describe("commands", () => {
     await engine.runCommand("mode global", active);
 
     expect(engine.getConfig().mode).toBe("global");
-    expect(await readJson(env.globalConfig)).toEqual({ mode: "global" });
-    expect(await pathExists(env.workspaceConfig)).toBe(false);
+    expect(await readJson(env.configPath)).toEqual({ mode: "global" });
   });
 
-  it("status reports mode, include flags and captured defaults", async () => {
+  it("status reports mode, include flags, pin, and captured defaults", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, { defaultModel: "claude-x" });
     const engine = newEngine(env);
@@ -505,15 +451,16 @@ describe("commands", () => {
 
     const message = env.notes.at(-1)?.message ?? "";
     expect(message).toContain("commands");
-    expect(message).toContain("save-global");
+    expect(message).toContain("pin");
+    expect(message).toContain("save");
   });
 });
 
 // ---------------------------------------------------------------------------
-// save-global confirmation
+// save confirmation
 // ---------------------------------------------------------------------------
 
-describe("save-global confirmation", () => {
+describe("save confirmation", () => {
   it("aborts the write when confirmation is declined", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, {
@@ -523,7 +470,7 @@ describe("save-global confirmation", () => {
     const engine = newEngine(env, { confirm: async () => false });
     await engine.init();
 
-    await engine.runCommand("save-global", ACTIVE);
+    await engine.runCommand("save", ACTIVE);
 
     expect(await readJson(env.globalSettings)).toEqual({
       defaultProvider: "anthropic",
@@ -547,7 +494,7 @@ describe("save-global confirmation", () => {
     });
     await engine.init();
 
-    await engine.runCommand("save-global", ACTIVE);
+    await engine.runCommand("save", ACTIVE);
 
     expect(asked).toBe(true);
     expect(await readJson(env.globalSettings)).toMatchObject({
@@ -570,7 +517,7 @@ describe("set command", () => {
     await engine.runCommand("set notify changes", ACTIVE);
 
     expect(engine.getConfig().notify).toBe("changes");
-    expect(await readJson(env.globalConfig)).toEqual({ notify: "changes" });
+    expect(await readJson(env.configPath)).toEqual({ notify: "changes" });
   });
 
   it("parses boolean include flags", async () => {
@@ -581,19 +528,7 @@ describe("set command", () => {
     await engine.runCommand("set include.model false", ACTIVE);
 
     expect(engine.getConfig().include.model).toBe(false);
-    expect(await readJson(env.globalConfig)).toEqual({ include: { model: false } });
-  });
-
-  it("honours an explicit --global target even when a .pi/ directory exists", async () => {
-    const env = await createEnv();
-    await mkdir(join(env.cwd, ".pi"), { recursive: true });
-    const engine = newEngine(env);
-    await engine.init();
-
-    await engine.runCommand("set mode workspace --global", ACTIVE);
-
-    expect(await readJson(env.globalConfig)).toEqual({ mode: "workspace" });
-    expect(await pathExists(env.workspaceConfig)).toBe(false);
+    expect(await readJson(env.configPath)).toEqual({ include: { model: false } });
   });
 
   it("rejects an invalid value without writing", async () => {
@@ -604,12 +539,12 @@ describe("set command", () => {
     await engine.runCommand("set notify loud", ACTIVE);
 
     expect(env.notes.at(-1)?.level).toBe("error");
-    expect(await pathExists(env.globalConfig)).toBe(false);
+    expect(await pathExists(env.configPath)).toBe(false);
   });
 
   it("skips a no-op write", async () => {
     const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { notify: "changes" });
+    await writeJsonAtomic(env.configPath, { notify: "changes" });
     const engine = newEngine(env);
     await engine.init();
 
@@ -617,38 +552,16 @@ describe("set command", () => {
 
     expect(env.notes.at(-1)?.message).toContain("no change");
   });
-});
 
-// ---------------------------------------------------------------------------
-// init command
-// ---------------------------------------------------------------------------
-
-describe("init command", () => {
-  it("creates a config file pre-filled with the documented defaults", async () => {
+  it("rejects invalid mode values", async () => {
     const env = await createEnv();
     const engine = newEngine(env);
     await engine.init();
 
-    await engine.runCommand("init global", ACTIVE);
+    await engine.runCommand("set mode workspace", ACTIVE);
 
-    expect(await readJson(env.globalConfig)).toEqual({
-      mode: "session",
-      notify: "errors",
-      restoreOnModelRestore: false,
-      include: { model: true, thinkingLevel: true },
-    });
-  });
-
-  it("refuses to overwrite an existing config file", async () => {
-    const env = await createEnv();
-    await writeJsonAtomic(env.globalConfig, { mode: "global" });
-    const engine = newEngine(env);
-    await engine.init();
-
-    await engine.runCommand("init global", ACTIVE);
-
-    expect(env.notes.at(-1)?.level).toBe("warning");
-    expect(await readJson(env.globalConfig)).toEqual({ mode: "global" });
+    expect(env.notes.at(-1)?.level).toBe("error");
+    expect(env.notes.at(-1)?.message).toContain("invalid value");
   });
 });
 
@@ -666,7 +579,6 @@ describe("failure visibility", () => {
     const engine = newEngine(env);
     await engine.init();
 
-    // Corrupt the global settings file so the restore read fails.
     await writeFile(env.globalSettings, "{ this is not json", "utf8");
     await engine.onModelSelect(modelEvent("openai", "gpt-5"));
 
@@ -687,7 +599,6 @@ describe("failure visibility", () => {
     await engine.onModelSelect(modelEvent("openai", "gpt-5"));
     expect(engine.getLastError()).toBeDefined();
 
-    // Repair the file; the next restore succeeds and clears the flag.
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "openai",
       defaultModel: "gpt-5",

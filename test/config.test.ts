@@ -33,13 +33,13 @@ describe("parseConfig", () => {
   it("keeps recognised, well-typed fields", () => {
     expect(
       parseConfig({
-        mode: "workspace",
+        mode: "session",
         include: { model: false, thinkingLevel: true },
         restoreOnModelRestore: true,
         notify: "changes",
       }),
     ).toEqual({
-      mode: "workspace",
+      mode: "session",
       include: { model: false, thinkingLevel: true },
       restoreOnModelRestore: true,
       notify: "changes",
@@ -70,6 +70,52 @@ describe("parseConfig", () => {
       include: { thinkingLevel: false },
     });
   });
+
+  it("parses pins keyed by absolute working-directory path", () => {
+    const raw = {
+      mode: "session",
+      pins: {
+        "/home/user/project-a": {
+          provider: "openai",
+          model: "gpt-5",
+          thinkingLevel: "high",
+        },
+        "/home/user/project-b": {
+          provider: "anthropic",
+          model: "claude-x",
+        },
+      },
+    };
+    expect(parseConfig(raw)).toEqual({
+      mode: "session",
+      pins: {
+        "/home/user/project-a": {
+          provider: "openai",
+          model: "gpt-5",
+          thinkingLevel: "high",
+        },
+        "/home/user/project-b": {
+          provider: "anthropic",
+          model: "claude-x",
+        },
+      },
+    });
+  });
+
+  it("drops malformed pin entries", () => {
+    const raw = {
+      pins: {
+        good: { provider: "openai", model: "gpt-5" },
+        bad: { provider: 7 },
+        alsoBad: "nope",
+      },
+    };
+    expect(parseConfig(raw)).toEqual({
+      pins: {
+        good: { provider: "openai", model: "gpt-5" },
+      },
+    });
+  });
 });
 
 describe("resolveConfig", () => {
@@ -77,47 +123,57 @@ describe("resolveConfig", () => {
     expect(resolveConfig()).toEqual(DEFAULT_CONFIG);
   });
 
-  it("layers later sources over earlier ones", () => {
-    const resolved = resolveConfig({ mode: "session", notify: "off" }, { mode: "global" });
+  it("returns the documented defaults when an empty layer is supplied", () => {
+    expect(resolveConfig({})).toEqual(DEFAULT_CONFIG);
+  });
+
+  it("overrides defaults with supplied fields", () => {
+    const resolved = resolveConfig({
+      mode: "global",
+      notify: "off",
+      include: { model: false },
+    });
     expect(resolved.mode).toBe("global");
     expect(resolved.notify).toBe("off");
+    expect(resolved.include.model).toBe(false);
+    expect(resolved.include.thinkingLevel).toBe(true);
   });
 
-  it("deep-merges the include block across layers", () => {
-    const resolved = resolveConfig(
-      { include: { model: false } },
-      { include: { thinkingLevel: false } },
-    );
-    expect(resolved.include).toEqual({ model: false, thinkingLevel: false });
+  it("preserves unset fields from defaults", () => {
+    const resolved = resolveConfig({ mode: "global" });
+    expect(resolved.include).toEqual(DEFAULT_CONFIG.include);
+    expect(resolved.notify).toBe(DEFAULT_CONFIG.notify);
+    expect(resolved.restoreOnModelRestore).toBe(DEFAULT_CONFIG.restoreOnModelRestore);
   });
 
-  it("lets a workspace layer override a global layer (workspace wins)", () => {
-    const global = parseConfig({ mode: "session" });
-    const workspace = parseConfig({ mode: "workspace" });
-    expect(resolveConfig(global, workspace).mode).toBe("workspace");
+  it("merges pins from layer", () => {
+    const pins = {
+      "/home/proj": { provider: "x", model: "y" },
+    };
+    expect(resolveConfig({ pins }).pins).toEqual(pins);
   });
 });
 
 describe("loadConfigFile", () => {
   it("reports a missing file", async () => {
     const dir = await tempDir();
-    const loaded = await loadConfigFile(join(dir, "model-persistence.json"));
+    const loaded = await loadConfigFile(join(dir, "config.json"));
     expect(loaded.exists).toBe(false);
     expect(loaded.config).toEqual({});
   });
 
   it("parses an existing file", async () => {
     const dir = await tempDir();
-    const path = join(dir, "model-persistence.json");
-    await writeJsonAtomic(path, { mode: "workspace" });
+    const path = join(dir, "config.json");
+    await writeJsonAtomic(path, { mode: "global" });
     const loaded = await loadConfigFile(path);
     expect(loaded.exists).toBe(true);
-    expect(loaded.config).toEqual({ mode: "workspace" });
+    expect(loaded.config).toEqual({ mode: "global" });
   });
 
   it("surfaces an error for corrupt JSON without throwing", async () => {
     const dir = await tempDir();
-    const path = join(dir, "model-persistence.json");
+    const path = join(dir, "config.json");
     const { writeFile } = await import("node:fs/promises");
     await writeFile(path, "{ broken", "utf8");
     const loaded = await loadConfigFile(path);
@@ -130,14 +186,14 @@ describe("loadConfigFile", () => {
 describe("updateConfigFile", () => {
   it("creates the file with just the patched field", async () => {
     const dir = await tempDir();
-    const path = join(dir, "model-persistence.json");
-    await updateConfigFile(path, { mode: "workspace" });
-    expect(await readJsonObject(path)).toEqual({ mode: "workspace" });
+    const path = join(dir, "config.json");
+    await updateConfigFile(path, { mode: "global" });
+    expect(await readJsonObject(path)).toEqual({ mode: "global" });
   });
 
   it("preserves unrelated keys already in the file", async () => {
     const dir = await tempDir();
-    const path = join(dir, "model-persistence.json");
+    const path = join(dir, "config.json");
     await writeJsonAtomic(path, { notify: "changes", include: { model: false } });
     await updateConfigFile(path, { mode: "global" });
     expect(await readJsonObject(path)).toEqual({
@@ -145,5 +201,13 @@ describe("updateConfigFile", () => {
       include: { model: false },
       mode: "global",
     });
+  });
+
+  it("writes pins", async () => {
+    const dir = await tempDir();
+    const path = join(dir, "config.json");
+    const pins = { "/home/proj": { provider: "x", model: "y" } };
+    await updateConfigFile(path, { pins });
+    expect(await readJsonObject(path)).toEqual({ pins });
   });
 });

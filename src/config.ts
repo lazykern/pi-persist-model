@@ -1,24 +1,29 @@
 /**
- * The extension's own configuration: schema, defaults, parsing, layered
- * resolution (workspace over global), and config-file IO.
+ * Extension configuration: schema, defaults, parsing, and config-file IO.
  *
- * Config files are JSON and live next to Pi's settings files:
- *   - global:    `~/.pi/agent/model-persistence.json`
- *   - workspace: `<cwd>/.pi/model-persistence.json`
+ * Single config file at `~/.pi/model-persistence/config.json`.
+ * No layering — one file, one truth.  Pi's native `.pi/settings.json` handles
+ * per-project model overrides when the user wants them.
  */
 
 import { type JsonObject, readJsonObject, writeJsonAtomic } from "./settings-file.ts";
 
-/** How model/thinking-level changes are persisted. */
-export type PersistenceMode = "session" | "workspace" | "global";
+// ── Types ──────────────────────────────────────────────────────────────────
 
-/** How much the extension reports through Pi's notification UI. */
+/** Persistence mode: `session` keeps changes in-session; `global` disables extension. */
+export type PersistenceMode = "session" | "global";
+
+/** Notification verbosity. */
 export type NotifyLevel = "off" | "errors" | "changes";
 
-/**
- * The on-disk config shape. Everything except `mode` may be omitted; missing
- * fields fall back to {@link DEFAULT_CONFIG} during resolution.
- */
+/** A pinned model/thinking-level preference for one workspace. */
+export type Pin = {
+  provider: string;
+  model: string;
+  thinkingLevel?: string;
+};
+
+/** The on-disk config shape. */
 export type ModelPersistenceConfig = {
   mode: PersistenceMode;
   include?: {
@@ -27,40 +32,47 @@ export type ModelPersistenceConfig = {
   };
   restoreOnModelRestore?: boolean;
   notify?: NotifyLevel;
+  /** Per-workspace model pins keyed by absolute working-directory path. */
+  pins?: Record<string, Pin>;
 };
 
-/** A fully-populated config with every field resolved to a concrete value. */
+/** Fully-resolved config with every optional field defaulted. */
 export type ResolvedConfig = {
   mode: PersistenceMode;
   include: { model: boolean; thinkingLevel: boolean };
   restoreOnModelRestore: boolean;
   notify: NotifyLevel;
+  pins: Record<string, Pin>;
 };
 
-/** The defaults applied when nothing is configured. */
+// ── Constants ──────────────────────────────────────────────────────────────
+
 export const DEFAULT_CONFIG: ResolvedConfig = {
   mode: "session",
   include: { model: true, thinkingLevel: true },
   restoreOnModelRestore: false,
   notify: "errors",
+  pins: {},
 };
 
-const MODES: readonly string[] = ["session", "workspace", "global"];
+const MODES: readonly string[] = ["session", "global"];
 const NOTIFY_LEVELS: readonly string[] = ["off", "errors", "changes"];
 
-/** Type guard for {@link PersistenceMode}. */
+// ── Guards ─────────────────────────────────────────────────────────────────
+
 export function isPersistenceMode(value: unknown): value is PersistenceMode {
   return typeof value === "string" && MODES.includes(value);
 }
 
-/** Type guard for {@link NotifyLevel}. */
 export function isNotifyLevel(value: unknown): value is NotifyLevel {
   return typeof value === "string" && NOTIFY_LEVELS.includes(value);
 }
 
+// ── Parse / Resolve ────────────────────────────────────────────────────────
+
 /**
- * Parse a raw config object leniently: recognised, well-typed fields are kept;
- * anything unknown or malformed is dropped. Never throws.
+ * Lenient parse: recognised, well-typed fields are kept; unknowns dropped.
+ * Never throws.
  */
 export function parseConfig(raw: unknown): Partial<ModelPersistenceConfig> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -91,59 +103,87 @@ export function parseConfig(raw: unknown): Partial<ModelPersistenceConfig> {
       out.include = include;
     }
   }
+  if (
+    obj.pins !== null &&
+    typeof obj.pins === "object" &&
+    !Array.isArray(obj.pins)
+  ) {
+    const rawPins = obj.pins as JsonObject;
+    const pins: Record<string, Pin> = {};
+    for (const [cwd, rawPin] of Object.entries(rawPins)) {
+      if (
+        rawPin !== null &&
+        typeof rawPin === "object" &&
+        !Array.isArray(rawPin) &&
+        typeof (rawPin as JsonObject).provider === "string" &&
+        typeof (rawPin as JsonObject).model === "string"
+      ) {
+        const p = rawPin as JsonObject;
+        pins[cwd] = {
+          provider: p.provider as string,
+          model: p.model as string,
+          thinkingLevel:
+            typeof p.thinkingLevel === "string" ? (p.thinkingLevel as string) : undefined,
+        };
+      }
+    }
+    if (Object.keys(pins).length > 0) {
+      out.pins = pins;
+    }
+  }
+
   return out;
 }
 
-/**
- * Merge config layers over {@link DEFAULT_CONFIG}. Later layers win, so call as
- * `resolveConfig(globalLayer, workspaceLayer)` to give the workspace priority.
- */
+/** Merge a parsed layer over defaults to produce a fully-resolved config. */
 export function resolveConfig(
-  ...layers: Array<Partial<ModelPersistenceConfig> | undefined>
+  layer?: Partial<ModelPersistenceConfig>,
 ): ResolvedConfig {
   const resolved: ResolvedConfig = {
     mode: DEFAULT_CONFIG.mode,
     include: { ...DEFAULT_CONFIG.include },
     restoreOnModelRestore: DEFAULT_CONFIG.restoreOnModelRestore,
     notify: DEFAULT_CONFIG.notify,
+    pins: { ...DEFAULT_CONFIG.pins },
   };
 
-  for (const layer of layers) {
-    if (!layer) {
-      continue;
+  if (!layer) {
+    return resolved;
+  }
+
+  if (layer.mode !== undefined) {
+    resolved.mode = layer.mode;
+  }
+  if (layer.notify !== undefined) {
+    resolved.notify = layer.notify;
+  }
+  if (layer.restoreOnModelRestore !== undefined) {
+    resolved.restoreOnModelRestore = layer.restoreOnModelRestore;
+  }
+  if (layer.include) {
+    if (layer.include.model !== undefined) {
+      resolved.include.model = layer.include.model;
     }
-    if (layer.mode !== undefined) {
-      resolved.mode = layer.mode;
-    }
-    if (layer.notify !== undefined) {
-      resolved.notify = layer.notify;
-    }
-    if (layer.restoreOnModelRestore !== undefined) {
-      resolved.restoreOnModelRestore = layer.restoreOnModelRestore;
-    }
-    if (layer.include) {
-      if (layer.include.model !== undefined) {
-        resolved.include.model = layer.include.model;
-      }
-      if (layer.include.thinkingLevel !== undefined) {
-        resolved.include.thinkingLevel = layer.include.thinkingLevel;
-      }
+    if (layer.include.thinkingLevel !== undefined) {
+      resolved.include.thinkingLevel = layer.include.thinkingLevel;
     }
   }
+  if (layer.pins) {
+    resolved.pins = { ...layer.pins };
+  }
+
   return resolved;
 }
 
-/** Result of loading one config file. */
+// ── IO ─────────────────────────────────────────────────────────────────────
+
 export type LoadedConfig = {
-  /** Whether the file existed on disk. */
   exists: boolean;
-  /** The parsed (lenient) config layer; `{}` when missing or unreadable. */
   config: Partial<ModelPersistenceConfig>;
-  /** A human-readable message when the file existed but could not be used. */
   error?: string;
 };
 
-/** Read and parse a config file. Never throws — IO/parse errors surface in `error`. */
+/** Read and parse the config file. Never throws. */
 export async function loadConfigFile(path: string): Promise<LoadedConfig> {
   try {
     const raw = await readJsonObject(path);
@@ -158,8 +198,8 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 }
 
 /**
- * Apply `patch` to the config file at `path`, preserving any unrelated keys
- * already present. Creates the file (and parent directory) when missing.
+ * Apply `patch` to the config file at `path`, preserving unrelated keys.
+ * Creates the file and parent directory when missing.
  */
 export async function updateConfigFile(
   path: string,
@@ -169,7 +209,6 @@ export async function updateConfigFile(
   try {
     existing = (await readJsonObject(path)) ?? {};
   } catch {
-    // An unreadable existing file is replaced rather than blocking the update.
     existing = {};
   }
 
@@ -191,6 +230,9 @@ export async function updateConfigFile(
         ? (existing.include as JsonObject)
         : {};
     next.include = { ...prior, ...patch.include };
+  }
+  if (patch.pins !== undefined) {
+    next.pins = patch.pins;
   }
 
   await writeJsonAtomic(path, next);
