@@ -1,0 +1,55 @@
+{
+  "name": "pi-model-persistence",
+  "version": "0.1.0",
+  "description": "Pi Coding Agent extension (\"Model Persistence\") that controls whether provider/model/thinking-level changes persist across Pi sessions.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Phusit Somboonyingsuk <lazykern@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lazykern/pi-model-persistence.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lazykern/pi-model-persistence/issues"
+  },
+  "homepage": "https://github.com/lazykern/pi-model-persistence#readme",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "model",
+    "thinking-level",
+    "settings"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "tsc --noEmit && vitest run",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "proper-lockfile": "4.1.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.75.4",
+    "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.0"
+  }
+}
