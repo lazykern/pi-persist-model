@@ -3,3 +3,4 @@ coverage/
 *.log
 *.tmp
 .DS_Store
+.pi/
