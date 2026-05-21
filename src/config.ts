@@ -154,7 +154,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
   }
 }
 
-export async function updateConfigFile(path: string, patch: PersistModelConfig): Promise<void> {
+export async function updateConfigFile(path: string, patch: PersistModelConfig, deleteWorkspaces?: string[]): Promise<void> {
   let existing: JsonObject = {};
   try {
     existing = (await readJsonObject(path)) ?? {};
@@ -176,20 +176,36 @@ export async function updateConfigFile(path: string, patch: PersistModelConfig):
     next.include = { ...prior, ...patch.include };
   }
 
-  if (patch.workspaces !== undefined) {
+  if (patch.workspaces !== undefined || (deleteWorkspaces !== undefined && deleteWorkspaces.length > 0)) {
     const prior =
       existing.workspaces !== null && typeof existing.workspaces === "object" && !Array.isArray(existing.workspaces)
         ? (existing.workspaces as JsonObject)
         : {};
     const workspaces: JsonObject = { ...prior };
-    for (const [workspaceId, workspacePatch] of Object.entries(patch.workspaces)) {
-      const existingWorkspace =
-        workspaces[workspaceId] !== null && typeof workspaces[workspaceId] === "object" && !Array.isArray(workspaces[workspaceId])
-          ? (workspaces[workspaceId] as JsonObject)
-          : {};
-      workspaces[workspaceId] = { ...existingWorkspace, ...workspacePatch };
+
+    // Delete entries explicitly (the merge below can only add/update, not remove)
+    if (deleteWorkspaces) {
+      for (const wsId of deleteWorkspaces) {
+        delete workspaces[wsId];
+      }
     }
-    next.workspaces = workspaces;
+
+    if (patch.workspaces) {
+      for (const [workspaceId, workspacePatch] of Object.entries(patch.workspaces)) {
+        const existingWorkspace =
+          workspaces[workspaceId] !== null && typeof workspaces[workspaceId] === "object" && !Array.isArray(workspaces[workspaceId])
+            ? (workspaces[workspaceId] as JsonObject)
+            : {};
+        workspaces[workspaceId] = { ...existingWorkspace, ...workspacePatch };
+      }
+    }
+
+    // Remove workspaces key if empty (no entries after delete + merge)
+    if (Object.keys(workspaces).length === 0) {
+      delete next.workspaces;
+    } else {
+      next.workspaces = workspaces;
+    }
   }
 
   await writeJsonAtomic(path, next);

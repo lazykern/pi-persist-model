@@ -263,16 +263,13 @@ export class PersistModelEngine {
       const scopeChangedFromWorkspace = oldEffective === "workspace" && newEffective !== "workspace";
 
       if (workspaceScope === "inherit" || workspaceScope === defaultScope) {
-        const existing = await readJsonObject(this.paths.configPath);
-        if (existing !== null && typeof existing.workspaces === "object" && !Array.isArray(existing.workspaces)) {
-          const workspaces = { ...existing.workspaces } as Record<string, WorkspacePersistModelConfig>;
-          delete workspaces[this.workspaceId];
-          patch.workspaces = workspaces;
-        }
+        // Delete workspace entry via explicit deleteWorkspaces — the merge
+        // in updateConfigFile cannot remove entries, only add/update.
+        await this.updateConfig(patch, [this.workspaceId]);
       } else {
         patch.workspaces = { [this.workspaceId]: { scope: workspaceScope } };
+        await this.updateConfig(patch);
       }
-      await this.updateConfig(patch);
       await this.loadConfig();
 
       // If leaving workspace scope, restore prior project settings before applyScope re-snapshots
@@ -329,9 +326,9 @@ export class PersistModelEngine {
     }
   }
 
-  private async updateConfig(patch: Parameters<typeof updateConfigFile>[1]): Promise<void> {
+  private async updateConfig(patch: Parameters<typeof updateConfigFile>[1], deleteWorkspaces?: string[]): Promise<void> {
     await mkdir(dirname(this.paths.configPath), { recursive: true });
-    await withFileLock(this.paths.configPath, () => updateConfigFile(this.paths.configPath, patch));
+    await withFileLock(this.paths.configPath, () => updateConfigFile(this.paths.configPath, patch, deleteWorkspaces));
   }
 
   private projectSettingsPath(): string {
