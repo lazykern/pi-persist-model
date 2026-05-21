@@ -9,6 +9,7 @@ import {
   nextWorkspaceScope,
   type PersistModelScope,
   type WorkspacePersistModelScope,
+  type WorkspacePersistModelConfig,
   type ResolvedPersistModelConfig,
   resolveConfig,
   resolveEffectiveScope,
@@ -20,6 +21,7 @@ import {
   type DefaultsKey,
   type DefaultsSnapshot,
   type JsonObject,
+  applyDefaults,
   readJsonObject,
   restoreDefaults,
   snapshotDefaults,
@@ -58,11 +60,18 @@ export type EngineDeps = {
   resolveWorkspaceId?: (cwd: string) => Promise<string>;
 };
 
+export type PiDefaultState = {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+};
+
 export type PersistenceState = {
   workspaceId: string;
   effectiveScope: PersistModelScope;
   workspaceScope: WorkspacePersistModelScope;
   defaultScope: PersistModelScope;
+  piDefault: PiDefaultState;
   include: { model: boolean; thinkingLevel: boolean };
   configPath: string;
   globalSettingsPath: string;
@@ -152,6 +161,7 @@ export class PersistModelEngine {
       effectiveScope: resolveEffectiveScope(this.config, this.workspaceId),
       workspaceScope,
       defaultScope: this.config.defaultScope,
+      piDefault: this.getPiDefaultState(),
       include: { ...this.config.include },
       configPath: this.paths.configPath,
       globalSettingsPath: this.paths.globalSettingsPath,
@@ -240,7 +250,7 @@ export class PersistModelEngine {
       if (workspaceScope === "inherit" || workspaceScope === defaultScope) {
         const existing = await readJsonObject(this.paths.configPath);
         if (existing !== null && typeof existing.workspaces === "object" && !Array.isArray(existing.workspaces)) {
-          const workspaces = { ...existing.workspaces } as JsonObject;
+          const workspaces = { ...existing.workspaces } as Record<string, WorkspacePersistModelConfig>;
           delete workspaces[this.workspaceId];
           patch.workspaces = workspaces;
         }
@@ -267,6 +277,27 @@ export class PersistModelEngine {
 
   async applyThinkingSelection(level: string): Promise<void> {
     await this.onThinkingLevelSelect({ level });
+  }
+
+  async savePiDefault(active: ActiveState): Promise<PersistenceState> {
+    await this.queue.enqueue(async () => {
+      const updates = activeToUpdates(active, { model: true, thinkingLevel: true });
+      if (Object.keys(updates).length === 0) return;
+      await withFileLock(this.paths.globalSettingsPath, async () => {
+        const current = await readJsonObject(this.paths.globalSettingsPath);
+        await writeJsonAtomic(this.paths.globalSettingsPath, applyDefaults(current ?? {}, updates));
+      });
+      await this.recapture();
+    });
+    return this.getPersistenceState();
+  }
+
+  private getPiDefaultState(): PiDefaultState {
+    return {
+      provider: this.snapshot.defaultProvider.present ? this.snapshot.defaultProvider.value : undefined,
+      model: this.snapshot.defaultModel.present ? this.snapshot.defaultModel.value : undefined,
+      thinkingLevel: this.snapshot.defaultThinkingLevel.present ? this.snapshot.defaultThinkingLevel.value : undefined,
+    };
   }
 
   private async loadConfig(): Promise<void> {

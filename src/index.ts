@@ -43,6 +43,7 @@ async function openPersistModelScreen(
       persistence: engine.getPersistenceState(),
       callbacks: {
         onSave: async (workspaceScope, defaultScope, active) => engine.configureScopes(workspaceScope, defaultScope, active),
+        onSavePiDefault: async (active) => engine.savePiDefault(active),
         onCancel: close,
       },
     });

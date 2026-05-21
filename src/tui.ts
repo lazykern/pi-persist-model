@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { nextScope, nextWorkspaceScope, type PersistModelScope, type WorkspacePersistModelScope } from "./config.ts";
-import type { ActiveState, PersistenceState } from "./engine.ts";
+import type { ActiveState, PersistenceState, PiDefaultState } from "./engine.ts";
 
 type ComponentLike = {
   render(width: number): string[];
@@ -14,6 +14,7 @@ type TuiLike = {
 
 export type PersistModelCallbacks = {
   onSave(workspaceScope: WorkspacePersistModelScope, defaultScope: PersistModelScope, active: ActiveState): Promise<PersistenceState>;
+  onSavePiDefault(active: ActiveState): Promise<PersistenceState>;
   onCancel(): void;
 };
 
@@ -60,6 +61,12 @@ function scopeLabel(scope: WorkspacePersistModelScope): string {
   return scope === "user" ? "pi default" : scope;
 }
 
+function formatPiDefault(state: PiDefaultState): string {
+  if (!state.provider && !state.model && !state.thinkingLevel) return "unset";
+  const model = state.model && state.provider ? `${state.model} [${state.provider}]` : state.model ?? state.provider ?? "unset";
+  return state.thinkingLevel ? `${model} · ${state.thinkingLevel}` : model;
+}
+
 export class PersistModelScreen implements ComponentLike {
   private readonly tui: TuiLike;
   private readonly theme: Theme;
@@ -73,6 +80,7 @@ export class PersistModelScreen implements ComponentLike {
   private defaultScope: PersistModelScope;
   private savedWorkspaceScope: WorkspacePersistModelScope;
   private savedDefaultScope: PersistModelScope;
+  private piDefault: PiDefaultState;
   private status: string | undefined;
   private error: string | undefined;
   private busy = false;
@@ -88,6 +96,7 @@ export class PersistModelScreen implements ComponentLike {
     this.defaultScope = options.persistence.defaultScope;
     this.savedWorkspaceScope = this.workspaceScope;
     this.savedDefaultScope = this.defaultScope;
+    this.piDefault = options.persistence.piDefault;
   }
 
   invalidate(): void {
@@ -100,6 +109,7 @@ export class PersistModelScreen implements ComponentLike {
     const lines: string[] = [];
     const add = (line = "") => lines.push(clampLine(line, w));
     const model = this.currentModel ? `${this.currentModel.id} [${this.currentModel.provider}]` : "(none)";
+    const piDefault = formatPiDefault(this.piDefault);
     const dirty = this.isDirty();
 
     add(border);
@@ -109,7 +119,9 @@ export class PersistModelScreen implements ComponentLike {
     add(`  ${this.workspaceId}`);
     add("");
     add(this.theme.fg("muted", "Current:"));
-    add(`  ${model} · thinking ${this.thinkingLevel}`);
+    add(`  ${model} · ${this.thinkingLevel}`);
+    add(this.theme.fg("muted", "Pi default:"));
+    add(`  ${piDefault}${this.isCurrentPiDefault() ? `  ${this.theme.fg("success", "✓ current")}` : ""}`);
     add("");
     add(`${this.theme.fg("muted", "Persistence:")}${dirty ? `  ${this.theme.fg("warning", "unsaved")}` : ""}`);
     add(`  Effective: ${this.theme.fg("accent", scopeLabel(this.effectiveScope()))}`);
@@ -121,7 +133,7 @@ export class PersistModelScreen implements ComponentLike {
     add(this.theme.fg("dim", "  workspace  → store per-workspace state in ~/.pi/persist-model"));
     add(this.theme.fg("dim", "  pi default → let Pi handle ~/.pi/agent/settings.json"));
     add("");
-    add(this.theme.fg("dim", "  ↑/↓ select · ←/→ change · ctrl+s save · esc close"));
+    add(this.theme.fg("dim", "  ↑/↓ row · ←/→ change · ctrl+s save · d save Pi default · esc close"));
     if (this.busy) add(this.theme.fg("warning", "  Saving..."));
     if (this.status) add(this.theme.fg("success", `  ${this.status}`));
     if (this.error) add(this.theme.fg("error", `  ${this.error}`));
@@ -152,6 +164,10 @@ export class PersistModelScreen implements ComponentLike {
     }
     if (data === "\x13") {
       this.save();
+      return;
+    }
+    if (data === "d") {
+      this.savePiDefault();
       return;
     }
     if (data === "\x1b") {
@@ -214,7 +230,28 @@ export class PersistModelScreen implements ComponentLike {
         this.defaultScope = state.defaultScope;
         this.savedWorkspaceScope = this.workspaceScope;
         this.savedDefaultScope = this.defaultScope;
+        this.piDefault = state.piDefault;
         this.status = "Saved persistence config";
+      })
+      .catch((error: unknown) => {
+        this.error = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        this.busy = false;
+        this.tui.requestRender();
+      });
+  }
+
+  private savePiDefault(): void {
+    this.busy = true;
+    this.status = undefined;
+    this.error = undefined;
+    this.tui.requestRender();
+    void this.callbacks
+      .onSavePiDefault(this.activeState())
+      .then((state) => {
+        this.piDefault = state.piDefault;
+        this.status = "Saved current as Pi default";
       })
       .catch((error: unknown) => {
         this.error = error instanceof Error ? error.message : String(error);
@@ -227,6 +264,12 @@ export class PersistModelScreen implements ComponentLike {
 
   private isDirty(): boolean {
     return this.workspaceScope !== this.savedWorkspaceScope || this.defaultScope !== this.savedDefaultScope;
+  }
+
+  private isCurrentPiDefault(): boolean {
+    return this.currentModel?.provider === this.piDefault.provider
+      && this.currentModel?.id === this.piDefault.model
+      && this.thinkingLevel === this.piDefault.thinkingLevel;
   }
 
   private clearMessages(): void {

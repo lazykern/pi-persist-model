@@ -247,6 +247,23 @@ describe("user scope", () => {
 
     expect(await readJson(env.globalSettings)).toEqual({ defaultProvider: "openai", defaultModel: "gpt-5" });
   });
+
+  it("saves current model and thinking as Pi default", async () => {
+    const env = await createEnv();
+    await writeJsonAtomic(env.globalSettings, { defaultProvider: "anthropic", defaultModel: "claude", theme: "dark" });
+    const engine = newEngine(env);
+    await engine.init();
+
+    const state = await engine.savePiDefault(ACTIVE);
+
+    expect(state.piDefault).toEqual({ provider: "openai", model: "gpt-5", thinkingLevel: "high" });
+    expect(await readJson(env.globalSettings)).toEqual({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5",
+      defaultThinkingLevel: "high",
+      theme: "dark",
+    });
+  });
 });
 
 describe("scope changes", () => {
