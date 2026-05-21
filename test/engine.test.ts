@@ -177,7 +177,7 @@ describe("session scope", () => {
 });
 
 describe("workspace scope", () => {
-  it("writes provider/model/thinking to ~/.pi/persist-model and restores global defaults", async () => {
+  it("writes provider/model/thinking to persist-model config + project .pi/settings.json and restores global defaults", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.configPath, { workspaces: { [env.workspaceId]: { scope: "workspace" } } });
     await writeJsonAtomic(env.globalSettings, {
@@ -205,10 +205,16 @@ describe("workspace scope", () => {
           provider: "openai",
           model: "gpt-5",
           thinkingLevel: "high",
+          priorProjectSettings: {},
         },
       },
     });
-    expect(await pathExists(join(env.cwd, ".pi"))).toBe(false);
+    // Project .pi/settings.json gets workspace model for seamless Pi startup
+    expect(await readJson(join(env.cwd, ".pi", "settings.json"))).toEqual({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5",
+      defaultThinkingLevel: "high",
+    });
     expect(await readJson(env.globalSettings)).toEqual({
       defaultProvider: "anthropic",
       defaultModel: "claude",
@@ -217,7 +223,7 @@ describe("workspace scope", () => {
     });
   });
 
-  it("does not create .pi when workspace scope is applied", async () => {
+  it("writes active model to project .pi/settings.json when workspace scope is applied", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, { defaultProvider: "anthropic", defaultModel: "claude" });
     const engine = newEngine(env);
@@ -225,10 +231,20 @@ describe("workspace scope", () => {
 
     await engine.setWorkspaceScope("workspace", ACTIVE);
 
-    expect(await pathExists(join(env.cwd, ".pi"))).toBe(false);
+    expect(await readJson(join(env.cwd, ".pi", "settings.json"))).toEqual({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5",
+      defaultThinkingLevel: "high",
+    });
     expect(await readJson(env.configPath)).toEqual({
       workspaces: {
-        [env.workspaceId]: { scope: "workspace", provider: "openai", model: "gpt-5", thinkingLevel: "high" },
+        [env.workspaceId]: {
+          scope: "workspace",
+          provider: "openai",
+          model: "gpt-5",
+          thinkingLevel: "high",
+          priorProjectSettings: {},
+        },
       },
     });
   });

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -11,6 +11,7 @@ import {
   type WorkspacePersistModelScope,
   type WorkspacePersistModelConfig,
   type ResolvedPersistModelConfig,
+  type ProjectSettingsPrior,
   resolveConfig,
   resolveEffectiveScope,
   updateConfigFile,
@@ -32,6 +33,8 @@ const execFileAsync = promisify(execFile);
 
 const MODEL_KEYS: readonly DefaultsKey[] = ["defaultProvider", "defaultModel"];
 const THINKING_KEYS: readonly DefaultsKey[] = ["defaultThinkingLevel"];
+const ALL_KEYS: readonly DefaultsKey[] = [...MODEL_KEYS, ...THINKING_KEYS];
+const PROJECT_CONFIG_DIR = ".pi";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -181,10 +184,13 @@ export class PersistModelEngine {
     await this.queue.enqueue(async () => {
       try {
         if (scope === "workspace") {
-          await this.writeWorkspaceDefaults({
+          const updates: Partial<Record<DefaultsKey, string>> = {
             defaultProvider: event.model.provider,
             defaultModel: event.model.id,
-          });
+          };
+          await this.capturePriorProjectSettingsIfMissing();
+          await this.writeProjectDefaults(updates);
+          await this.writeWorkspaceDefaults(updates);
         }
         await this.restoreGlobalDefaults(MODEL_KEYS);
         this.clearFailure();
@@ -202,7 +208,12 @@ export class PersistModelEngine {
     await this.queue.enqueue(async () => {
       try {
         if (scope === "workspace") {
-          await this.writeWorkspaceDefaults({ defaultThinkingLevel: event.level });
+          const updates: Partial<Record<DefaultsKey, string>> = {
+            defaultThinkingLevel: event.level,
+          };
+          await this.capturePriorProjectSettingsIfMissing();
+          await this.writeProjectDefaults(updates);
+          await this.writeWorkspaceDefaults(updates);
         }
         await this.restoreGlobalDefaults(THINKING_KEYS);
         this.clearFailure();
@@ -247,6 +258,10 @@ export class PersistModelEngine {
   ): Promise<PersistenceState> {
     await this.queue.enqueue(async () => {
       const patch: Parameters<typeof updateConfigFile>[1] = { defaultScope };
+      const newEffective = workspaceScope === "inherit" ? defaultScope : workspaceScope;
+      const oldEffective = resolveEffectiveScope(this.config, this.workspaceId);
+      const scopeChangedFromWorkspace = oldEffective === "workspace" && newEffective !== "workspace";
+
       if (workspaceScope === "inherit" || workspaceScope === defaultScope) {
         const existing = await readJsonObject(this.paths.configPath);
         if (existing !== null && typeof existing.workspaces === "object" && !Array.isArray(existing.workspaces)) {
@@ -259,6 +274,12 @@ export class PersistModelEngine {
       }
       await this.updateConfig(patch);
       await this.loadConfig();
+
+      // If leaving workspace scope, restore prior project settings before applyScope re-snapshots
+      if (scopeChangedFromWorkspace) {
+        await this.restorePriorProjectSettings();
+      }
+
       await this.applyScope(resolveEffectiveScope(this.config, this.workspaceId), active);
     });
     return this.getPersistenceState();
@@ -313,6 +334,10 @@ export class PersistModelEngine {
     await withFileLock(this.paths.configPath, () => updateConfigFile(this.paths.configPath, patch));
   }
 
+  private projectSettingsPath(): string {
+    return join(this.cwd, PROJECT_CONFIG_DIR, "settings.json");
+  }
+
   private async recapture(): Promise<void> {
     try {
       const settings = await readJsonObject(this.paths.globalSettingsPath);
@@ -329,16 +354,85 @@ export class PersistModelEngine {
     const keys = Object.keys(updates) as DefaultsKey[];
 
     if (scope === "user") {
+      await this.restorePriorProjectSettings();
       return;
     }
 
     if (scope === "workspace") {
+      await this.capturePriorProjectSettingsIfMissing();
+      await this.writeProjectDefaults(updates);
       await this.writeWorkspaceDefaults(updates);
+    } else {
+      await this.restorePriorProjectSettings();
     }
 
     await this.restoreGlobalDefaults(keys);
   }
 
+  /**
+   * If the workspace has no priorProjectSettings yet, snapshot current
+   * project .pi/settings.json values so they can be restored later.
+   */
+  private async capturePriorProjectSettingsIfMissing(): Promise<void> {
+    const ws = this.config.workspaces[this.workspaceId];
+    if (ws?.priorProjectSettings !== undefined) return;
+
+    const path = this.projectSettingsPath();
+    const current = await readJsonObject(path);
+    const prior: ProjectSettingsPrior = {};
+    if (current) {
+      if (typeof current.defaultProvider === "string") prior.defaultProvider = current.defaultProvider;
+      if (typeof current.defaultModel === "string") prior.defaultModel = current.defaultModel;
+      if (typeof current.defaultThinkingLevel === "string") prior.defaultThinkingLevel = current.defaultThinkingLevel;
+    }
+    await this.updateConfig({
+      workspaces: { [this.workspaceId]: { priorProjectSettings: prior } },
+    });
+    await this.loadConfig();
+  }
+
+  /**
+   * Restore project .pi/settings.json to the values saved in
+   * priorProjectSettings, then delete priorProjectSettings from config.
+   */
+  private async restorePriorProjectSettings(): Promise<void> {
+    const ws = this.config.workspaces[this.workspaceId];
+    const prior = ws?.priorProjectSettings;
+    if (!prior) return;
+
+    const path = this.projectSettingsPath();
+    const snapshot = snapshotDefaults(null);
+    if (prior.defaultProvider !== undefined) snapshot.defaultProvider = { present: true, value: prior.defaultProvider };
+    if (prior.defaultModel !== undefined) snapshot.defaultModel = { present: true, value: prior.defaultModel };
+    if (prior.defaultThinkingLevel !== undefined) snapshot.defaultThinkingLevel = { present: true, value: prior.defaultThinkingLevel };
+
+    await withFileLock(path, async () => {
+      const current = await readJsonObject(path);
+      if (current === null) return;
+      const restored = restoreDefaults(current, snapshot, ALL_KEYS);
+      await writeJsonAtomic(path, restored);
+    });
+
+    // Remove priorProjectSettings from config by patching with undefined
+    // (JSON.stringify drops undefined keys, effectively deleting them).
+    await this.updateConfig({
+      workspaces: { [this.workspaceId]: { priorProjectSettings: undefined } as unknown as WorkspacePersistModelConfig },
+    });
+    await this.loadConfig();
+  }
+
+  /**
+   * Write model/thinking keys to project .pi/settings.json so Pi picks
+   * them up on next startup (project settings override global).
+   */
+  private async writeProjectDefaults(updates: Partial<Record<DefaultsKey, string>>): Promise<void> {
+    if (Object.keys(updates).length === 0) return;
+    const path = this.projectSettingsPath();
+    await withFileLock(path, async () => {
+      const current = await readJsonObject(path);
+      await writeJsonAtomic(path, applyDefaults(current ?? {}, updates));
+    });
+  }
 
   private async writeWorkspaceDefaults(updates: Partial<Record<DefaultsKey, string>>): Promise<void> {
     if (Object.keys(updates).length === 0) return;

@@ -3,11 +3,19 @@ import { type JsonObject, readJsonObject, writeJsonAtomic } from "./settings-fil
 export type PersistModelScope = "session" | "workspace" | "user";
 export type WorkspacePersistModelScope = PersistModelScope | "inherit";
 
+export type ProjectSettingsPrior = {
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultThinkingLevel?: string;
+};
+
 export type WorkspacePersistModelConfig = {
   scope?: WorkspacePersistModelScope;
   provider?: string;
   model?: string;
   thinkingLevel?: string;
+  /** Saved before the extension writes to project .pi/settings.json. */
+  priorProjectSettings?: ProjectSettingsPrior;
 };
 
 export type PersistModelConfig = {
@@ -87,6 +95,14 @@ export function parseConfig(raw: unknown): PersistModelConfig {
       if (typeof raw.provider === "string") workspace.provider = raw.provider;
       if (typeof raw.model === "string") workspace.model = raw.model;
       if (typeof raw.thinkingLevel === "string") workspace.thinkingLevel = raw.thinkingLevel;
+      if (raw.priorProjectSettings !== null && typeof raw.priorProjectSettings === "object" && !Array.isArray(raw.priorProjectSettings)) {
+        const pps = raw.priorProjectSettings as JsonObject;
+        const prior: ProjectSettingsPrior = {};
+        if (typeof pps.defaultProvider === "string") prior.defaultProvider = pps.defaultProvider;
+        if (typeof pps.defaultModel === "string") prior.defaultModel = pps.defaultModel;
+        if (typeof pps.defaultThinkingLevel === "string") prior.defaultThinkingLevel = pps.defaultThinkingLevel;
+        workspace.priorProjectSettings = prior;
+      }
       if (Object.keys(workspace).length > 0) workspaces[workspaceId] = workspace;
     }
     if (Object.keys(workspaces).length > 0) {

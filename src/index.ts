@@ -1,4 +1,4 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { type ThinkingLevel, PersistModelEngine } from "./engine.ts";
 import { fallbackAgentDir } from "./paths.ts";
@@ -6,6 +6,35 @@ import { PersistModelScreen } from "./tui.ts";
 
 export { PersistModelEngine } from "./engine.ts";
 export type { ActiveState, PersistenceState, ThinkingLevel } from "./engine.ts";
+
+async function applyWorkspaceState(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  engine: PersistModelEngine,
+): Promise<void> {
+  const state = engine.getPersistenceState();
+  if (state.effectiveScope !== "workspace") return;
+
+  const config = engine.getConfig();
+  const ws = config.workspaces[state.workspaceId];
+  if (!ws) return;
+
+  if (ws.provider && ws.model) {
+    const savedModel = ctx.modelRegistry.find(ws.provider, ws.model);
+    if (savedModel) {
+      try {
+        await pi.setModel(savedModel);
+      } catch {
+        // model unavailable; skip
+      }
+    }
+  }
+
+  if (ws.thinkingLevel) {
+    const level = asThinkingLevel(ws.thinkingLevel);
+    pi.setThinkingLevel(level);
+  }
+}
 
 function agentDir(): string {
   try {
@@ -60,6 +89,10 @@ export default function persistModelExtension(pi: ExtensionAPI): void {
       notify: (message, level) => ctx.ui.notify(message, level),
     });
     await engine.init();
+
+    // Apply workspace-saved model/thinking so the override takes effect
+    // even when Pi's initial model (read from global settings) differs.
+    await applyWorkspaceState(pi, ctx, engine);
   });
 
   pi.on("model_select", async (event) => {
