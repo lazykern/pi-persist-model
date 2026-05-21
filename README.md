@@ -4,6 +4,8 @@ Persist Model is a Pi extension for controlling how model and reasoning-level se
 
 Use it to keep changes temporary for the current session, save them for a specific workspace, or apply them globally.
 
+![Persist Model TUI](https://raw.githubusercontent.com/lazykern/pi-persist-model/main/screenshot.png)
+
 ```
 pi install npm:pi-persist-model
 /persist-model   ← opens TUI

@@ -1,6 +1,6 @@
 {
   "name": "pi-persist-model",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Choose whether Pi model and reasoning-level settings apply per session, per workspace, or globally.",
   "type": "module",
   "license": "MIT",
@@ -23,11 +23,13 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/lazykern/pi-persist-model/main/screenshot.png"
   },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "screenshot.png"
   ],
   "engines": {
     "node": ">=20"
