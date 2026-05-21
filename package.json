@@ -1,7 +1,7 @@
 {
   "name": "pi-persist-model",
-  "version": "0.4.1",
-  "description": "Choose whether Pi model and reasoning-level settings apply per session, per workspace, or globally.",
+  "version": "0.4.2",
+  "description": "Persist model & reasoning settings per session, workspace, or globally",
   "type": "module",
   "license": "MIT",
   "author": "Phusit Somboonyingsuk <lazykern@gmail.com>",
