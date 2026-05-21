@@ -1,5 +1,5 @@
 {
-  "name": "pi-persist-model",
+  "name": "@lazykern/pi-persist-model",
   "version": "0.4.2",
   "description": "Persist model & reasoning settings per session, workspace, or globally",
   "type": "module",
