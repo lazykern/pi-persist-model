@@ -78,13 +78,11 @@ export type EngineDeps = {
   home: string;
   cwd: string;
   notify: Notifier;
-  setStatus?: (id: string, text: string) => void;
   confirm?: Confirm;
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const STATUS_ID = "model-persistence";
 const LOG_PREFIX = "model-persistence:";
 
 const MODEL_KEYS: readonly DefaultsKey[] = ["defaultProvider", "defaultModel"];
@@ -193,7 +191,6 @@ export class ModelPersistence {
   private readonly paths: ExtensionPaths;
   private readonly cwd: string;
   private readonly notify: Notifier;
-  private readonly setStatus: ((id: string, text: string) => void) | undefined;
   private readonly confirm: Confirm | undefined;
   private readonly queue = new SerialQueue();
 
@@ -208,7 +205,6 @@ export class ModelPersistence {
     this.paths = resolvePaths({ home: deps.home });
     this.cwd = deps.cwd;
     this.notify = deps.notify;
-    this.setStatus = deps.setStatus;
     this.confirm = deps.confirm;
   }
 
@@ -217,7 +213,6 @@ export class ModelPersistence {
   async init(): Promise<void> {
     await this.loadConfig();
     await this.recapture();
-    this.updateStatus();
   }
 
   private async loadConfig(): Promise<void> {
@@ -426,7 +421,6 @@ export class ModelPersistence {
       await withFileLock(path, () => updateConfigFile(path, patch));
     });
     await this.loadConfig();
-    this.updateStatus();
     this.notify(`${LOG_PREFIX} ${key} set to "${rawValue}" (${path})`, "info");
   }
 
@@ -456,7 +450,6 @@ export class ModelPersistence {
         this.snapshot = snapshotDefaults(next);
       });
     });
-    this.updateStatus();
     this.notify(`${LOG_PREFIX} saved global defaults — ${describeUpdates(updates)}`, "info");
   }
 
@@ -482,7 +475,6 @@ export class ModelPersistence {
       await withFileLock(path, () => updateConfigFile(path, { pins }));
     });
     await this.loadConfig();
-    this.updateStatus();
     this.notify(
       `${LOG_PREFIX} pinned ${pin.provider}/${pin.model} to this workspace ` +
         `(saved in ${path})`,
@@ -506,7 +498,6 @@ export class ModelPersistence {
       await withFileLock(path, () => updateConfigFile(path, { pins }));
     });
     await this.loadConfig();
-    this.updateStatus();
     this.notify(`${LOG_PREFIX} removed workspace pin`, "info");
   }
 
@@ -534,11 +525,6 @@ export class ModelPersistence {
     });
   }
 
-  private updateStatus(): void {
-    const base = `persist:${this.config.mode}`;
-    this.setStatus?.(STATUS_ID, this.lastError ? `${base} ⚠` : base);
-  }
-
   private reportError(message: string): void {
     if (this.config.notify !== "off") {
       this.notify(message, "error");
@@ -548,13 +534,11 @@ export class ModelPersistence {
   private fail(message: string): void {
     this.lastError = message;
     this.reportError(message);
-    this.updateStatus();
   }
 
   private clearFailure(): void {
     if (this.lastError !== undefined) {
       this.lastError = undefined;
-      this.updateStatus();
     }
   }
 
@@ -626,7 +610,6 @@ export default function modelPersistenceExtension(pi: ExtensionAPI): void {
       home: homedir(),
       cwd: ctx.cwd,
       notify: (message, level) => ctx.ui.notify(message, level),
-      setStatus: (id, text) => ctx.ui.setStatus(id, text),
       confirm: ctx.hasUI
         ? (title, message) => ctx.ui.confirm(title, message)
         : undefined,

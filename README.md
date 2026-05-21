@@ -134,12 +134,6 @@ touch or overwrite `.pi/settings.json`.
 /model-persistence set restoreOnModelRestore true
 ```
 
-### Status footer
-
-The extension shows `persist:<mode>` in Pi's footer. If a restore fails, it
-changes to `persist:<mode> ⚠`. This warning is shown even with `notify: "off"`,
-since a failed restore means Pi's write may not have been undone.
-
 ## Installation
 
 ### From local clone

@@ -11,7 +11,6 @@ import { type JsonObject, pathExists, writeJsonAtomic } from "../src/settings-fi
 // ---------------------------------------------------------------------------
 
 type Note = { message: string; level: "info" | "warning" | "error" };
-type Status = { id: string; text: string };
 
 type Env = {
   home: string;
@@ -19,7 +18,6 @@ type Env = {
   globalSettings: string;
   configPath: string;
   notes: Note[];
-  statuses: Status[];
 };
 
 const tempRoots: string[] = [];
@@ -38,7 +36,6 @@ async function createEnv(): Promise<Env> {
     globalSettings: join(home, ".pi", "agent", "settings.json"),
     configPath: join(home, ".pi", "model-persistence", "config.json"),
     notes: [],
-    statuses: [],
   };
 }
 
@@ -56,7 +53,6 @@ function newEngine(env: Env, opts: { confirm?: Confirm } = {}): ModelPersistence
     home: env.home,
     cwd: env.cwd,
     notify: (message, level) => env.notes.push({ message, level }),
-    setStatus: (id, text) => env.statuses.push({ id, text }),
     confirm: opts.confirm,
   });
 }
@@ -566,11 +562,11 @@ describe("set command", () => {
 });
 
 // ---------------------------------------------------------------------------
-// failure visibility
+// failure state
 // ---------------------------------------------------------------------------
 
-describe("failure visibility", () => {
-  it("flags a write failure in the footer status", async () => {
+describe("failure state", () => {
+  it("records a write failure", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "anthropic",
@@ -583,10 +579,9 @@ describe("failure visibility", () => {
     await engine.onModelSelect(modelEvent("openai", "gpt-5"));
 
     expect(engine.getLastError()).toBeDefined();
-    expect(env.statuses.at(-1)?.text).toContain("⚠");
   });
 
-  it("clears the footer warning after a later success", async () => {
+  it("clears failure state after later success", async () => {
     const env = await createEnv();
     await writeJsonAtomic(env.globalSettings, {
       defaultProvider: "anthropic",
@@ -606,6 +601,5 @@ describe("failure visibility", () => {
     await engine.onModelSelect(modelEvent("openai", "gpt-5"));
 
     expect(engine.getLastError()).toBeUndefined();
-    expect(env.statuses.at(-1)?.text).toBe("persist:session");
   });
 });
