@@ -9,6 +9,12 @@ pi install npm:pi-persist-model
 /persist-model   ← opens TUI
 ```
 
+## The problem
+
+Pi stores model and reasoning defaults in `~/.pi/agent/settings.json`. Every time you switch model or reasoning level, Pi writes those changes to the **global** config — so a quick "let me try GPT-5 for this one question" silently becomes the default for every future session and every project.
+
+Persist Model intercepts those changes and keeps them scoped to your chosen policy: session-only, per-workspace, or global.
+
 No project `.pi/` folders. All state in `~/.pi/persist-model/config.json`.
 
 ## Scopes
