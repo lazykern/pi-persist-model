@@ -160,7 +160,7 @@ export class PersistModelScreen implements ComponentLike {
   }
 
   private workspaceRow(): string {
-    return this.row("Workspace", this.workspaceScope, ["inherit", "session", "workspace", "user"]);
+    return this.row("Workspace", this.workspaceScope, ["session", "workspace", "user", "inherit"]);
   }
 
   private defaultRow(): string {
