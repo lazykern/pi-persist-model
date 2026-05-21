@@ -58,7 +58,11 @@ function clampLine(line: string, width: number): string {
 }
 
 function scopeLabel(scope: WorkspacePersistModelScope): string {
-  return scope === "user" ? "pi default" : scope;
+  switch (scope) {
+    case "user": return "pi default";
+    case "inherit": return "user default";
+    default: return scope;
+  }
 }
 
 function formatPiDefault(state: PiDefaultState): string {
@@ -129,7 +133,7 @@ export class PersistModelScreen implements ComponentLike {
     add(this.workspaceRow());
     add(this.defaultRow());
     add("");
-    add(this.theme.fg("dim", "  inherit    → use User default policy"));
+    add(this.theme.fg("dim", "  user default → use User default policy"));
     add(this.theme.fg("dim", "  workspace  → store per-workspace state in ~/.pi/persist-model"));
     add(this.theme.fg("dim", "  pi default → let Pi handle ~/.pi/agent/settings.json"));
     add("");

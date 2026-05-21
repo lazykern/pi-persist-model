@@ -26,7 +26,7 @@ No project `.pi/` folders. All state in `~/.pi/persist-model/config.json`.
 | `session` | Changes last only this session |
 | `workspace` | Saved per project under `~/.pi/persist-model` |
 | `pi default` | Let Pi handle it normally |
-| `inherit` | Workspace follows User default |
+| `user default` | Workspace follows User default |
 
 ## TUI
 
