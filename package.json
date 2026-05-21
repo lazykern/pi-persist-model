@@ -1,18 +1,18 @@
 {
-  "name": "pi-model-persistence",
+  "name": "pi-persist-model",
   "version": "0.1.0",
-  "description": "Pi Coding Agent extension (\"Model Persistence\") that controls whether provider/model/thinking-level changes persist across Pi sessions.",
+  "description": "Pi Coding Agent extension (\"Persist Model\") that controls where model and thinking-level changes are saved.",
   "type": "module",
   "license": "MIT",
   "author": "Phusit Somboonyingsuk <lazykern@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lazykern/pi-model-persistence.git"
+    "url": "git+https://github.com/lazykern/pi-persist-model.git"
   },
   "bugs": {
-    "url": "https://github.com/lazykern/pi-model-persistence/issues"
+    "url": "https://github.com/lazykern/pi-persist-model/issues"
   },
-  "homepage": "https://github.com/lazykern/pi-model-persistence#readme",
+  "homepage": "https://github.com/lazykern/pi-persist-model#readme",
   "keywords": [
     "pi-package",
     "pi-extension",

@@ -8,6 +8,7 @@ import {
   loadConfigFile,
   parseConfig,
   resolveConfig,
+  resolveEffectiveScope,
   updateConfigFile,
 } from "../src/config.ts";
 import { readJsonObject, writeJsonAtomic } from "../src/settings-file.ts";
@@ -15,7 +16,7 @@ import { readJsonObject, writeJsonAtomic } from "../src/settings-file.ts";
 const tempRoots: string[] = [];
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "mp-cfg-"));
+  const dir = await mkdtemp(join(tmpdir(), "pm-cfg-"));
   tempRoots.push(dir);
   return dir;
 }
@@ -23,9 +24,7 @@ async function tempDir(): Promise<string> {
 afterEach(async () => {
   while (tempRoots.length > 0) {
     const dir = tempRoots.pop();
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-    }
+    if (dir) await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -33,181 +32,113 @@ describe("parseConfig", () => {
   it("keeps recognised, well-typed fields", () => {
     expect(
       parseConfig({
-        mode: "session",
+        defaultScope: "workspace",
         include: { model: false, thinkingLevel: true },
-        restoreOnModelRestore: true,
-        notify: "changes",
+        workspaces: {
+          "/repo": { scope: "user" },
+        },
       }),
     ).toEqual({
-      mode: "session",
+      defaultScope: "workspace",
       include: { model: false, thinkingLevel: true },
-      restoreOnModelRestore: true,
-      notify: "changes",
+      workspaces: {
+        "/repo": { scope: "user" },
+      },
     });
   });
 
   it("drops unknown or malformed fields", () => {
     expect(
       parseConfig({
-        mode: "bogus",
-        notify: 7,
-        restoreOnModelRestore: "yes",
+        defaultScope: "bogus",
         include: { model: "no" },
+        workspaces: { "/repo": { scope: "nope" }, bad: null },
         extra: "ignored",
       }),
     ).toEqual({});
   });
 
-  it("returns an empty layer for non-objects", () => {
+  it("returns empty config for non-objects", () => {
     expect(parseConfig(null)).toEqual({});
     expect(parseConfig("nope")).toEqual({});
     expect(parseConfig([1, 2])).toEqual({});
   });
-
-  it("keeps a partially-specified include block", () => {
-    expect(parseConfig({ mode: "session", include: { thinkingLevel: false } })).toEqual({
-      mode: "session",
-      include: { thinkingLevel: false },
-    });
-  });
-
-  it("parses pins keyed by absolute working-directory path", () => {
-    const raw = {
-      mode: "session",
-      pins: {
-        "/home/user/project-a": {
-          provider: "openai",
-          model: "gpt-5",
-          thinkingLevel: "high",
-        },
-        "/home/user/project-b": {
-          provider: "anthropic",
-          model: "claude-x",
-        },
-      },
-    };
-    expect(parseConfig(raw)).toEqual({
-      mode: "session",
-      pins: {
-        "/home/user/project-a": {
-          provider: "openai",
-          model: "gpt-5",
-          thinkingLevel: "high",
-        },
-        "/home/user/project-b": {
-          provider: "anthropic",
-          model: "claude-x",
-        },
-      },
-    });
-  });
-
-  it("drops malformed pin entries", () => {
-    const raw = {
-      pins: {
-        good: { provider: "openai", model: "gpt-5" },
-        bad: { provider: 7 },
-        alsoBad: "nope",
-      },
-    };
-    expect(parseConfig(raw)).toEqual({
-      pins: {
-        good: { provider: "openai", model: "gpt-5" },
-      },
-    });
-  });
 });
 
 describe("resolveConfig", () => {
-  it("returns the documented defaults when nothing is supplied", () => {
+  it("returns documented defaults", () => {
     expect(resolveConfig()).toEqual(DEFAULT_CONFIG);
   });
 
-  it("returns the documented defaults when an empty layer is supplied", () => {
-    expect(resolveConfig({})).toEqual(DEFAULT_CONFIG);
-  });
-
-  it("overrides defaults with supplied fields", () => {
+  it("merges include and workspaces", () => {
     const resolved = resolveConfig({
-      mode: "global",
-      notify: "off",
-      include: { model: false },
+      include: { thinkingLevel: false },
+      workspaces: { "/repo": { scope: "workspace" } },
     });
-    expect(resolved.mode).toBe("global");
-    expect(resolved.notify).toBe("off");
-    expect(resolved.include.model).toBe(false);
-    expect(resolved.include.thinkingLevel).toBe(true);
+    expect(resolved.include).toEqual({ model: true, thinkingLevel: false });
+    expect(resolved.workspaces["/repo"]).toEqual({ scope: "workspace" });
+  });
+});
+
+describe("resolveEffectiveScope", () => {
+  it("resolves workspace-specific scope", () => {
+    const cfg = resolveConfig({ defaultScope: "session", workspaces: { "/repo": { scope: "workspace" } } });
+    expect(resolveEffectiveScope(cfg, "/repo")).toBe("workspace");
   });
 
-  it("preserves unset fields from defaults", () => {
-    const resolved = resolveConfig({ mode: "global" });
-    expect(resolved.include).toEqual(DEFAULT_CONFIG.include);
-    expect(resolved.notify).toBe(DEFAULT_CONFIG.notify);
-    expect(resolved.restoreOnModelRestore).toBe(DEFAULT_CONFIG.restoreOnModelRestore);
+  it("falls back to defaultScope", () => {
+    const cfg = resolveConfig({ defaultScope: "user" });
+    expect(resolveEffectiveScope(cfg, "/repo")).toBe("user");
   });
 
-  it("merges pins from layer", () => {
-    const pins = {
-      "/home/proj": { provider: "x", model: "y" },
-    };
-    expect(resolveConfig({ pins }).pins).toEqual(pins);
+  it("falls back to built-in session", () => {
+    const cfg = resolveConfig({});
+    expect(resolveEffectiveScope(cfg, "/repo")).toBe("session");
   });
 });
 
 describe("loadConfigFile", () => {
-  it("reports a missing file", async () => {
+  it("loads config from config.json", async () => {
     const dir = await tempDir();
-    const loaded = await loadConfigFile(join(dir, "config.json"));
+    const path = join(dir, "config.json");
+    await writeJsonAtomic(path, { defaultScope: "workspace" });
+    const loaded = await loadConfigFile(path);
+    expect(loaded.exists).toBe(true);
+    expect(loaded.config).toEqual({ defaultScope: "workspace" });
+  });
+
+  it("reports missing file", async () => {
+    const dir = await tempDir();
+    const loaded = await loadConfigFile(join(dir, "missing.json"));
     expect(loaded.exists).toBe(false);
     expect(loaded.config).toEqual({});
-  });
-
-  it("parses an existing file", async () => {
-    const dir = await tempDir();
-    const path = join(dir, "config.json");
-    await writeJsonAtomic(path, { mode: "global" });
-    const loaded = await loadConfigFile(path);
-    expect(loaded.exists).toBe(true);
-    expect(loaded.config).toEqual({ mode: "global" });
-  });
-
-  it("surfaces an error for corrupt JSON without throwing", async () => {
-    const dir = await tempDir();
-    const path = join(dir, "config.json");
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(path, "{ broken", "utf8");
-    const loaded = await loadConfigFile(path);
-    expect(loaded.exists).toBe(true);
-    expect(loaded.config).toEqual({});
-    expect(loaded.error).toBeTypeOf("string");
   });
 });
 
 describe("updateConfigFile", () => {
-  it("creates the file with just the patched field", async () => {
+  it("changes workspace scope", async () => {
     const dir = await tempDir();
     const path = join(dir, "config.json");
-    await updateConfigFile(path, { mode: "global" });
-    expect(await readJsonObject(path)).toEqual({ mode: "global" });
+    await updateConfigFile(path, { workspaces: { "/repo": { scope: "workspace" } } });
+    expect(await readJsonObject(path)).toEqual({ workspaces: { "/repo": { scope: "workspace" } } });
   });
 
-  it("preserves unrelated keys already in the file", async () => {
+  it("changes default scope", async () => {
     const dir = await tempDir();
     const path = join(dir, "config.json");
-    await writeJsonAtomic(path, { notify: "changes", include: { model: false } });
-    await updateConfigFile(path, { mode: "global" });
+    await updateConfigFile(path, { defaultScope: "user" });
+    expect(await readJsonObject(path)).toEqual({ defaultScope: "user" });
+  });
+
+  it("preserves unrelated JSON keys", async () => {
+    const dir = await tempDir();
+    const path = join(dir, "config.json");
+    await writeJsonAtomic(path, { unrelated: 1, include: { model: false } });
+    await updateConfigFile(path, { defaultScope: "workspace", include: { thinkingLevel: false } });
     expect(await readJsonObject(path)).toEqual({
-      notify: "changes",
-      include: { model: false },
-      mode: "global",
+      unrelated: 1,
+      include: { model: false, thinkingLevel: false },
+      defaultScope: "workspace",
     });
-  });
-
-  it("writes pins", async () => {
-    const dir = await tempDir();
-    const path = join(dir, "config.json");
-    const pins = { "/home/proj": { provider: "x", model: "y" } };
-    await updateConfigFile(path, { pins });
-    expect(await readJsonObject(path)).toEqual({ pins });
   });
 });

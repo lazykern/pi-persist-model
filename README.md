@@ -1,233 +1,138 @@
-# pi-model-persistence
+# Persist Model
 
-A [Pi Coding Agent](https://github.com/earendil-works/pi) extension — **Model
-Persistence** — that prevents model and thinking-level changes from leaking into
-your *global* defaults.
+- Package: `pi-persist-model`
+- Extension ID: `persist-model`
+- Command: `/persist-model`
+- Display name: Persist Model
 
-- **Extension ID:** `model-persistence`
-- **Display name:** Model Persistence
-- **Command:** `/model-persistence`
+Persist Model adds a `/persist-model` configuration screen to Pi.
 
-## The problem
+It controls what happens after model and thinking-level changes: `session`, `workspace`, or `pi default`.
 
-When you switch model with `/model` or `Ctrl+P`, or change the reasoning level,
-Pi writes the new value into `~/.pi/agent/settings.json`:
+- `session` — temporary changes for the current session only
+- `workspace` — per-workspace state stored under `~/.pi/persist-model`
+- `pi default` — do nothing; let Pi use its normal `~/.pi/agent/settings.json` behavior
+- `inherit` — workspace row only; follow the User default policy
 
-- `defaultProvider`
-- `defaultModel`
-- `defaultThinkingLevel`
+All Persist Model extension config/state is stored in:
 
-Those keys are the **global defaults for every future Pi session**. A quick,
-throwaway "let me try gpt-5 for this one question" silently becomes the default
-your next project starts on.
+```text
+~/.pi/persist-model/config.json
+```
 
-Model Persistence fixes that: changes stay session-only unless you explicitly
-save them.
+Persist Model does **not** create project-level folders or files. It does not create `<workspace>/.pi/`.
 
-## How it works
+## Command
 
-By default (session mode), the extension snapshots your global defaults at
-session start, then **restores them** every time Pi writes a new model or
-thinking level to `~/.pi/agent/settings.json`. The active session changes
-freely — global defaults are untouched.
+```text
+/persist-model
+```
 
-In global mode, the extension does nothing — Pi's stock behavior is preserved.
+No subcommands. The command always opens the interactive TUI.
 
-| Mode | Active session | Global `~/.pi/agent/settings.json` |
-|------|----------------|------------------------------------|
-| `session` *(default)* | changes normally | **restored** to session-start snapshot |
-| `global` | changes normally | left as Pi wrote it (stock behavior) |
+## Scopes
+
+| Scope | Meaning |
+| --- | --- |
+| `session` | Changes affect only the current session. Future sessions keep previous defaults. |
+| `workspace` | Changes are stored per workspace under `~/.pi/persist-model`, keyed by workspace path. |
+| `user` / `pi default` | Persist Model does nothing; Pi keeps its normal user-level behavior. |
+| `inherit` | Workspace-only value; use the User default policy. |
 
 ## Configuration
 
-Single config file: `~/.pi/model-persistence/config.json`
-
-If the file doesn't exist, defaults apply — nothing is created automatically.
-
-### Schema
-
 ```ts
-type ModelPersistenceConfig = {
-  mode: "session" | "global";
+type PersistModelScope = "session" | "workspace" | "user";
+type WorkspacePersistModelScope = PersistModelScope | "inherit";
+
+type PersistModelConfig = {
+  defaultScope?: PersistModelScope;
   include?: {
-    model?: boolean;          // default: true
-    thinkingLevel?: boolean;  // default: true
+    model?: boolean;
+    thinkingLevel?: boolean;
   };
-  restoreOnModelRestore?: boolean;  // default: false
-  notify?: "off" | "errors" | "changes";  // default: "errors"
-  pins?: Record<string, {     // per-workspace model pins
-    provider: string;
-    model: string;
-    thinkingLevel?: string;
-  }>;
+  workspaces?: Record<
+    string,
+    {
+      scope?: WorkspacePersistModelScope;
+      provider?: string;
+      model?: string;
+      thinkingLevel?: string;
+    }
+  >;
 };
 ```
 
-| Field | Meaning |
-|-------|---------|
-| `mode` | `session` restores globals after changes; `global` disables extension |
-| `include.model` | When `false`, model/provider changes are ignored |
-| `include.thinkingLevel` | When `false`, thinking-level changes are ignored |
-| `restoreOnModelRestore` | When `false` (default), session restore events are ignored |
-| `notify` | `off` = silent, `errors` = only failures, `changes` = announce each kept change |
-| `pins` | Model preferences keyed by absolute cwd path — set via `/model-persistence pin` |
-
-### Default config
+Default config:
 
 ```json
 {
-  "mode": "session",
+  "defaultScope": "session",
   "include": {
     "model": true,
     "thinkingLevel": true
   },
-  "restoreOnModelRestore": false,
-  "notify": "errors"
+  "workspaces": {}
 }
 ```
 
-## Commands
-
-`/model-persistence <subcommand>`:
-
-| Subcommand | Action |
-|------------|--------|
-| *(no arg)* or `status` | Show mode, include flags, captured defaults, config path, workspace pin, and last error |
-| `help` | List every subcommand |
-| `mode <session\|global>` | Switch persistence mode (shorthand for `set mode`) |
-| `set <key> <value>` | Write one config field. Keys: `mode`, `notify`, `restoreOnModelRestore`, `include.model`, `include.thinkingLevel` |
-| `save` | Write the session's current model/thinking level into `~/.pi/agent/settings.json`. Prompts for confirmation |
-| `pin` | Pin the current model/thinking level to this workspace (stored in config) |
-| `unpin` | Remove the workspace pin |
-
-### `save` — make current model your new global default
-
-`/model-persistence save` overwrites the defaults every future Pi session starts
-with. It asks for confirmation first (in interactive mode), then updates the
-captured baseline so future session-mode restores won't fight your deliberate
-choice.
-
-### `pin` / `unpin` — remember a workspace model
-
-`/model-persistence pin` saves the current model to your config file under the
-current workspace path. It's a reminder — Pi doesn't auto-apply it. Use
-`/model-persistence` to see your pin, and switch to it manually when you want.
-
-For automatic per-project model preferences, use Pi's native `.pi/settings.json`
-— create it manually in your project root:
+Workspace overrides are keyed by stable absolute workspace path. Git worktrees naturally get separate paths.
 
 ```json
 {
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-5"
+  "defaultScope": "session",
+  "include": {
+    "model": true,
+    "thinkingLevel": true
+  },
+  "workspaces": {
+    "/Users/me/work/project-a": {
+      "scope": "workspace",
+      "provider": "openai",
+      "model": "gpt-5",
+      "thinkingLevel": "high"
+    },
+    "/Users/me/work/project-b": {
+      "scope": "user"
+    }
+  }
 }
 ```
 
-Pi reads this on startup and applies it automatically. The extension doesn't
-touch or overwrite `.pi/settings.json`.
+## TUI keys
 
-### `set` examples
+| Key | Action |
+| --- | --- |
+| `↑/↓` | Select Workspace scope or User default scope. |
+| `←/→` | Change selected scope value. |
+| `ctrl+s` | Save both scope settings and apply current model/thinking level to effective scope. |
+| `esc` | Close TUI. |
+
+TUI configures only persistence policy for this project/worktree. Model and thinking-level selection still use Pi’s native controls. No footer/status widget is added.
+
+## Storage
+
+Persist Model writes only extension-owned state:
+
+- Extension config/state: `~/.pi/persist-model/config.json`
+- Pi user settings: `~/.pi/agent/settings.json` is only restored for `session`/`workspace`, or left alone for `pi default`
+- Project/workspace files: never created by Persist Model
+
+Unrelated JSON keys are preserved. Writes are atomic and file-locked where possible.
+
+## Development
 
 ```bash
-/model-persistence set notify changes
-/model-persistence set include.model false
-/model-persistence set restoreOnModelRestore true
-```
-
-## Installation
-
-### From local clone
-
-```bash
-git clone https://github.com/lazykern/pi-model-persistence.git
-cd pi-model-persistence
 npm install
-
-# Load into Pi
-pi -e /absolute/path/to/pi-model-persistence
+npm run typecheck
+npm test
 ```
 
-### Global installation
+Load locally:
 
 ```bash
-pi install /absolute/path/to/pi-model-persistence
-# or, once published:
-pi install npm:pi-model-persistence
+pi -e /absolute/path/to/pi-persist-model
 ```
-
-Then configure — either run `touch ~/.pi/model-persistence/config.json` for
-defaults, or edit the file directly.
-
-## Local development
-
-This package is consumed as TypeScript source (Pi loads extensions via
-[jiti](https://github.com/unjs/jiti), no build step):
-
-```bash
-git clone https://github.com/lazykern/pi-model-persistence.git
-cd pi-model-persistence
-npm install
-
-npm run typecheck   # tsc --noEmit
-npm test            # vitest run
-```
-
-Load it into Pi without installing:
-
-```bash
-pi -e /absolute/path/to/pi-model-persistence
-# or point at the entry file directly while iterating:
-pi -e /absolute/path/to/pi-model-persistence/src/index.ts
-```
-
-For `/reload` support, symlink or copy the directory into
-`~/.pi/agent/extensions/` or a project's `.pi/extensions/`.
-
-## How it works
-
-- On `session_start` the extension loads its config and **snapshots** the
-  current global `default*` keys from `~/.pi/agent/settings.json`.
-- On `model_select` / `thinking_level_select` it restores those snapshotted
-  global keys (unless mode is `global` or the relevant `include` flag is off).
-- All settings writes go through a single in-process queue, so a model change
-  and the thinking-level change it triggers can never interleave their
-  read/modify/write cycles.
-- Global `settings.json` writes also take a cross-process advisory lock
-  (`proper-lockfile`, the same mechanism Pi's own settings writer uses), so
-  multiple concurrent Pi sessions coordinate.
-- Writes are atomic (temp file + rename), unrelated keys are preserved, and a
-  field that was originally absent is **deleted** on restore rather than
-  written back as `null`.
-
-## Limitations
-
-- **This is a post-change repair extension, not a pre-write prevention
-  mechanism.** It reacts *after* Pi has already changed a setting.
-- Pi may briefly write the new global defaults to `~/.pi/agent/settings.json`
-  before the extension restores them. A reader that races that window can
-  observe the transient value.
-- Multiple concurrent Pi sessions can still race: the cross-process lock makes
-  individual writes safe, but two sessions restoring different snapshots will
-  fight. Locking is used where possible; it is not a full transaction.
-- The extension only manages `defaultProvider`, `defaultModel`, and
-  `defaultThinkingLevel`. Other settings are never touched.
-
-## Future: native core support
-
-This extension exists because Pi has no first-class notion of per-session vs.
-global model persistence. The clean long-term fix is a core setting, e.g.:
-
-```ts
-modelPersistence: "session" | "global"
-```
-
-Native support should:
-
-- Cover `defaultProvider`, `defaultModel`, **and** `defaultThinkingLevel`.
-- Apply the policy *before* writing settings, rather than repairing afterward —
-  eliminating the transient-write window and the inter-session race entirely.
-
-At that point this extension can be retired.
 
 ## License
 

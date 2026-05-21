@@ -1,48 +1,41 @@
-/**
- * Filesystem locations for the extension.
- *
- * - Extension config: `~/.pi/model-persistence/config.json`
- * - Pi global settings: `~/.pi/agent/settings.json` (snapshotted/restored)
- *
- * No workspace `.pi/` paths — Pi's native project settings handle per-project
- * overrides; this extension only guards global defaults.
- */
-
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-/** Name of the config directory inside `~/.pi`. */
-const CONFIG_DIR = "model-persistence";
-/** Name of the single config file. */
-const CONFIG_FILENAME = "config.json";
-/** Pi's settings filename. */
+export const EXTENSION_ID = "persist-model";
 export const SETTINGS_FILENAME = "settings.json";
 
 export type ExtensionPaths = {
-  /** `~/.pi/model-persistence` */
+  agentDir: string;
   configDir: string;
-  /** `~/.pi/model-persistence/config.json` */
   configPath: string;
-  /** `~/.pi/agent` */
-  globalAgentDir: string;
-  /** `~/.pi/agent/settings.json` */
   globalSettingsPath: string;
 };
 
-/**
- * Resolve every path the extension cares about.
- *
- * @param options.home  Home directory; defaults to `os.homedir()`.
- */
-export function resolvePaths(options: { home?: string }): ExtensionPaths {
+export function fallbackAgentDir(home = homedir()): string {
+  const envDir = process.env.PI_CODING_AGENT_DIR;
+  if (envDir) {
+    if (envDir === "~") return home;
+    if (envDir.startsWith("~/")) return join(home, envDir.slice(2));
+    return envDir;
+  }
+  return join(home, ".pi", "agent");
+}
+
+function inferPiDir(agentDir: string, home = homedir()): string {
+  const parent = dirname(agentDir);
+  return agentDir === join(parent, "agent") && parent.endsWith(".pi") ? parent : join(home, ".pi");
+}
+
+export function resolvePaths(options: { agentDir?: string; home?: string } = {}): ExtensionPaths {
   const home = options.home ?? homedir();
-  const configDir = join(home, ".pi", CONFIG_DIR);
-  const globalAgentDir = join(home, ".pi", "agent");
+  const agentDir = options.agentDir ?? fallbackAgentDir(home);
+  const configDir = join(inferPiDir(agentDir, home), EXTENSION_ID);
 
   return {
+    agentDir,
     configDir,
-    configPath: join(configDir, CONFIG_FILENAME),
-    globalAgentDir,
-    globalSettingsPath: join(globalAgentDir, SETTINGS_FILENAME),
+    configPath: join(configDir, "config.json"),
+    globalSettingsPath: join(agentDir, SETTINGS_FILENAME),
   };
 }
+
