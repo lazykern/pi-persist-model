@@ -199,6 +199,11 @@ describe("workspace scope", () => {
     await engine.onThinkingLevelSelect({ level: "high" });
 
     expect(await readJson(env.configPath)).toEqual({
+      piDefaults: {
+        defaultProvider: "anthropic",
+        defaultModel: "claude",
+        defaultThinkingLevel: "medium",
+      },
       workspaces: {
         [env.workspaceId]: {
           scope: "workspace",
@@ -237,6 +242,10 @@ describe("workspace scope", () => {
       defaultThinkingLevel: "high",
     });
     expect(await readJson(env.configPath)).toEqual({
+      piDefaults: {
+        defaultProvider: "anthropic",
+        defaultModel: "claude",
+      },
       workspaces: {
         [env.workspaceId]: {
           scope: "workspace",

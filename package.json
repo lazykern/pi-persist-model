@@ -1,6 +1,6 @@
 {
   "name": "@lazykern/pi-persist-model",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Persist model & reasoning settings per session, workspace, or globally",
   "type": "module",
   "license": "MIT",

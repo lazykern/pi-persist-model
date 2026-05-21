@@ -9,6 +9,14 @@ export type ProjectSettingsPrior = {
   defaultThinkingLevel?: string;
 };
 
+/** Canonical user-intended defaults, stored in extension config.
+ *  Read first on init so snapshot isn't poisoned by global-settings leaks. */
+export type PiDefaults = {
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultThinkingLevel?: string;
+};
+
 export type WorkspacePersistModelConfig = {
   scope?: WorkspacePersistModelScope;
   provider?: string;
@@ -25,12 +33,14 @@ export type PersistModelConfig = {
     thinkingLevel?: boolean;
   };
   workspaces?: Record<string, WorkspacePersistModelConfig>;
+  piDefaults?: PiDefaults;
 };
 
 export type ResolvedPersistModelConfig = {
   defaultScope: PersistModelScope;
   include: { model: boolean; thinkingLevel: boolean };
   workspaces: Record<string, WorkspacePersistModelConfig>;
+  piDefaults?: PiDefaults;
 };
 
 export const DEFAULT_CONFIG: ResolvedPersistModelConfig = {
@@ -110,6 +120,15 @@ export function parseConfig(raw: unknown): PersistModelConfig {
     }
   }
 
+  if (obj.piDefaults !== null && typeof obj.piDefaults === "object" && !Array.isArray(obj.piDefaults)) {
+    const raw = obj.piDefaults as JsonObject;
+    const piDefaults: PiDefaults = {};
+    if (typeof raw.defaultProvider === "string") piDefaults.defaultProvider = raw.defaultProvider;
+    if (typeof raw.defaultModel === "string") piDefaults.defaultModel = raw.defaultModel;
+    if (typeof raw.defaultThinkingLevel === "string") piDefaults.defaultThinkingLevel = raw.defaultThinkingLevel;
+    if (Object.keys(piDefaults).length > 0) out.piDefaults = piDefaults;
+  }
+
   return out;
 }
 
@@ -128,6 +147,7 @@ export function resolveConfig(layer?: PersistModelConfig): ResolvedPersistModelC
     if (layer.include.thinkingLevel !== undefined) resolved.include.thinkingLevel = layer.include.thinkingLevel;
   }
   if (layer.workspaces) resolved.workspaces = { ...layer.workspaces };
+  if (layer.piDefaults) resolved.piDefaults = { ...layer.piDefaults };
 
   return resolved;
 }
@@ -174,6 +194,18 @@ export async function updateConfigFile(path: string, patch: PersistModelConfig, 
         ? (existing.include as JsonObject)
         : {};
     next.include = { ...prior, ...patch.include };
+  }
+
+  if (patch.piDefaults !== undefined) {
+    if (Object.keys(patch.piDefaults).length === 0) {
+      delete next.piDefaults;
+    } else {
+      const priorPi =
+        next.piDefaults !== null && typeof next.piDefaults === "object" && !Array.isArray(next.piDefaults)
+          ? (next.piDefaults as JsonObject)
+          : {};
+      next.piDefaults = { ...priorPi, ...patch.piDefaults } as JsonObject;
+    }
   }
 
   if (patch.workspaces !== undefined || (deleteWorkspaces !== undefined && deleteWorkspaces.length > 0)) {

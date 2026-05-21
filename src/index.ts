@@ -106,6 +106,10 @@ export default function persistModelExtension(pi: ExtensionAPI): void {
     await engine?.onThinkingLevelSelect({ level: event.level });
   });
 
+  pi.on("session_shutdown", async () => {
+    await engine?.shutdown();
+  });
+
   pi.registerCommand("persist-model", {
     description: "Open Persist Model configuration screen",
     handler: async (_args, ctx) => {

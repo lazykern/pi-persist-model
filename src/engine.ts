@@ -12,6 +12,7 @@ import {
   type WorkspacePersistModelConfig,
   type ResolvedPersistModelConfig,
   type ProjectSettingsPrior,
+  type PiDefaults,
   resolveConfig,
   resolveEffectiveScope,
   updateConfigFile,
@@ -133,7 +134,10 @@ export class PersistModelEngine {
   async init(): Promise<void> {
     this.workspaceId = await this.resolveWorkspaceIdFn(this.cwd);
     await this.loadConfig();
-    await this.recapture();
+    // Snapshot from piDefaults (canonical store) to avoid poisoning from
+    // global-settings leaks. On first run, capture from global settings and
+    // persist as piDefaults.
+    await this.captureFromPiDefaultsOrSeed();
   }
 
   getPaths(): ExtensionPaths {
@@ -301,13 +305,32 @@ export class PersistModelEngine {
     await this.queue.enqueue(async () => {
       const updates = activeToUpdates(active, { model: true, thinkingLevel: true });
       if (Object.keys(updates).length === 0) return;
+
+      // Write to global settings AND config.piDefaults so the canonical
+      // store stays in sync with the user's intended defaults.
       await withFileLock(this.paths.globalSettingsPath, async () => {
         const current = await readJsonObject(this.paths.globalSettingsPath);
         await writeJsonAtomic(this.paths.globalSettingsPath, applyDefaults(current ?? {}, updates));
       });
+
+      // Persist to config.piDefaults (canonical store that survives leaks)
+      const piDefaults: PiDefaults = {};
+      if (updates.defaultProvider) piDefaults.defaultProvider = updates.defaultProvider;
+      if (updates.defaultModel) piDefaults.defaultModel = updates.defaultModel;
+      if (updates.defaultThinkingLevel) piDefaults.defaultThinkingLevel = updates.defaultThinkingLevel;
+      await this.updateConfig({ piDefaults });
+      await this.loadConfig();
+
       await this.recapture();
     });
     return this.getPersistenceState();
+  }
+
+  /** Restore global settings to canonical piDefaults on session end. */
+  async shutdown(): Promise<void> {
+    // Wait for any in-flight work to settle before restoring
+    await this.queue.onIdle();
+    await this.restoreGlobalDefaults(ALL_KEYS);
   }
 
   private getPiDefaultState(): PiDefaultState {
@@ -333,6 +356,53 @@ export class PersistModelEngine {
 
   private projectSettingsPath(): string {
     return join(this.cwd, PROJECT_CONFIG_DIR, "settings.json");
+  }
+
+  /**
+   * Snapshot from config.piDefaults (canonical store) if present.
+   * On first run (no piDefaults yet), seed piDefaults from current
+   * global settings so the snapshot doesn't capture prior leaks.
+   */
+  private async captureFromPiDefaultsOrSeed(): Promise<void> {
+    try {
+      if (this.config.piDefaults) {
+        // Use canonical defaults as snapshot — immune to global-settings leaks
+        const obj: JsonObject = {};
+        const pd = this.config.piDefaults;
+        if (pd.defaultProvider) obj.defaultProvider = pd.defaultProvider;
+        if (pd.defaultModel) obj.defaultModel = pd.defaultModel;
+        if (pd.defaultThinkingLevel) obj.defaultThinkingLevel = pd.defaultThinkingLevel;
+        this.snapshot = snapshotDefaults(obj);
+        this.clearFailure();
+        return;
+      }
+
+      // First run: snapshot from global settings, then persist as piDefaults.
+      // This seeds the canonical store with the user's current setup.
+      const settings = await readJsonObject(this.paths.globalSettingsPath);
+      this.snapshot = snapshotDefaults(settings);
+
+      const piDefaults: PiDefaults = {};
+      if (this.snapshot.defaultProvider.present) piDefaults.defaultProvider = this.snapshot.defaultProvider.value;
+      if (this.snapshot.defaultModel.present) piDefaults.defaultModel = this.snapshot.defaultModel.value;
+      if (this.snapshot.defaultThinkingLevel.present) piDefaults.defaultThinkingLevel = this.snapshot.defaultThinkingLevel.value;
+
+      if (Object.keys(piDefaults).length > 0) {
+        await this.updateConfig({ piDefaults });
+        await this.loadConfig();
+      }
+      this.clearFailure();
+    } catch (error) {
+      // Fallback: snapshot from global settings without seeding piDefaults
+      try {
+        const settings = await readJsonObject(this.paths.globalSettingsPath);
+        this.snapshot = snapshotDefaults(settings);
+        this.clearFailure();
+      } catch (inner) {
+        this.snapshot = snapshotDefaults(null);
+        this.fail(`persist-model: cannot read settings — ${describeError(inner)}`);
+      }
+    }
   }
 
   private async recapture(): Promise<void> {
